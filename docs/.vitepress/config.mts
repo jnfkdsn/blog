@@ -1,6 +1,7 @@
 import { defineConfig } from 'vitepress'
 
 export default defineConfig({
+  base: '/blog/',
   title: 'AI Infra 学习记录',
   description: 'CUDA / AI Infra 学习笔记与实践',
   lang: 'zh-CN',

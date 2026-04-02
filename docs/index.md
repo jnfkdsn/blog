@@ -2,8 +2,8 @@
 layout: home
 
 hero:
-  name: "AI Infra 学习记录"
-  text: "从零开始的 CUDA 学习之路"
+  name: "学习记录"
+  text: "CUDA"
   tagline: CUDA Kernel 优化 · CMake 构建 · 高性能计算
   actions:
     - theme: brand
