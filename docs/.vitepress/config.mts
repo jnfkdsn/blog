@@ -2,7 +2,7 @@ import { defineConfig } from 'vitepress'
 
 export default defineConfig({
   base: '/blog/',
-  title: 'AI Infra 学习记录',
+  title: '学习记录',
   description: 'CUDA / AI Infra 学习笔记与实践',
   lang: 'zh-CN',
 
@@ -28,7 +28,7 @@ export default defineConfig({
           text: '实践记录',
           items: [
             { text: '概览', link: '/posts/' },
-            { text: '第一个 CUDA Kernel', link: '/posts/first-kernel' },
+            { text: 'CUDA Kernel', link: '/posts/first-kernel' },
           ]
         }
       ]

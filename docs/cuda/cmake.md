@@ -6,51 +6,37 @@
 
 单文件用 `nvcc -o softmax softmax.cu` 就行，但真实项目（vLLM、FlashAttention）全部用 CMake 管理几十上百个源文件。看不懂 CMakeLists.txt 就没法在本地编译和修改这些项目。
 
-## 最小 CUDA 项目的 CMakeLists.txt
-
-我的第一个 CMake + CUDA 项目只需要这几行：
-
-```cmake
-cmake_minimum_required(VERSION 3.18)
-project(hello_cuda LANGUAGES CXX CUDA)
-
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CUDA_STANDARD 17)
-
-add_executable(main main.cpp vector_add.cu)
-
-set_target_properties(main PROPERTIES
-    CUDA_ARCHITECTURES "86"
-)
+## python 调用 cuda 算子
+```
+my_ext/
+├── CMakeLists.txt         
+├── csrc/
+│   ├── bindings.cpp        
+│   └── softmax_kernel.cu   
+├── my_ext/
+│   └── __init__.py         
+└── setup.py 
 ```
 
-关键点：`project()` 里加上 `CUDA`，CMake 就会自动用 nvcc 编译 `.cu` 文件、用 g++ 编译 `.cpp` 文件。
 
 ## 踩坑记录
 
-### CUDA_ARCHITECTURES 必须设对
-
-一开始没设这个参数，结果运行时报 "no kernel image for device"。
-
-原因：`CUDA_ARCHITECTURES` 决定 nvcc 生成什么架构的 GPU 机器码。我的 GPU 是 RTX 3090（sm_86），如果不设或者设错了就会出问题。
-
-查自己 GPU 的架构：`nvidia-smi` 看 GPU 型号，然后对照表查 Compute Capability。
-
-### find_package 找不到 PyTorch
-
-报错：`Could not find a package configuration file provided by "Torch"`
-
-解决：80% 的 find_package 失败都是 `CMAKE_PREFIX_PATH` 没设对。用这条命令拿到正确路径：
-
-```bash
-python -c "import torch; print(torch.utils.cmake_prefix_path)"
+1. find_package 找不到 PyTorch
+设置 `CMAKE_PREFIX_PATH`
+```cmake
+execute_process(
+    COMMAND python -c "import torch; print(torch.utils.cmake_prefix_path)"
+    OUTPUT_VARIABLE TORCH_CMAKE_PATH
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+list(APPEND CMAKE_PREFIX_PATH "${TORCH_CMAKE_PATH}")
+find_package(Torch REQUIRED)
 ```
 
-然后在 cmake 命令里指定：
+2. pybind11 3.x + CMake 4.x 需要先 find_package(Python) 才能用 python_add_library
+3. torch_python 库不在默认搜索路径，需要用完整路径链接
+4. TORCH_EXTENSION_NAME 宏只在 torch.utils.cpp_extension 构建时才定义，用 CMake 构建时要手动写模块名 _C
 
-```bash
-cmake -B build -DCMAKE_PREFIX_PATH=$(python -c "import torch; print(torch.utils.cmake_prefix_path)")
-```
 
 ## 还没搞懂的
 
