@@ -46,48 +46,14 @@ __global__ void relu_kernel(const float* input, float* output, int n) {
 
 ## 0.3结构体与类
 ### struct
-```cpp
-struct dim3{
-    unsigned int x,y,z;
-    dim3(unsigned int x = 1, unsigned int y = 1, unsigned int z = 1)
-        :x(x),y(y),z(z) {}
-};
-dim3 grid(16, 16);    // grid.x = 16, grid.y = 16, grid.z = 1
-```
 ### class
 类和结构体在 C++ 中几乎相同，唯一区别：`struct` 默认成员 `public`，`class` 默认 `private`。
-```cpp
-class BlockManager {
-private:
-    std::vector<CacheBlock> blocks_;
-    int num_free_blocks_;
-public:
-    // 构造函数
-    BlockManager(int total_blocks, int block_size)
-        : num_free_blocks_(total_blocks) {
-        blocks_.resize(total_blocks);
-        for (int i = 0; i < total_blocks; i++) {
-            blocks_[i].block_id = i;
-            blocks_[i].ref_count = 0;
-            cudaMalloc(&blocks_[i].key_data, block_size * sizeof(float));
-            cudaMalloc(&blocks_[i].value_data, block_size * sizeof(float));
-        }
-    }
-    // 析构函数：对象销毁时自动调用
-    ~BlockManager() {
-        for (auto& block : blocks_) {
-            cudaFree(block.key_data);
-            cudaFree(block.value_data);
-        }
-    }
-};
-```
 构造函数初始化列表更高效
 ```cpp
 MyClass(int a, int b) : x(a), y(b) {}
 ```
 ### this指针
-在成员函数内部，`this` 是一个隐式指针，指向当前对象本身
+在成员函数内部，`this` 指向当前对象本身
 两种必须用 this 的场景：
 1. 参数名和成员名相同时（消除歧义）
 推荐使用size_来命名成员避免冲突
@@ -104,4 +70,117 @@ TensorBuilder builder;
 builder.set_batch(32).set_seq_len(512);  // 每个函数返回 *this，所以能接着调用
 ```
 
-## RAII与智能指针
+## 0.4 RAII与智能指针
+
+### RAII（资源获取即初始化）
+核心思想：
+> 把资源的获取（分配内存/打开文件/锁）放在对象的构造函数中，把资源的释放放在析构函数。不再需要手动管理内存
+
+### 禁止拷贝
+避免浅拷贝复制地址，释放相同的位置
+
+### 智能指针 std::unique_ptr
+
+C++ 标准库提供了 `unique_ptr`——自动管理资源生命周期的智能指针，本质就是 RAII 的通用封装：
+
+```cpp
+#include <memory>
+// unique_ptr 独占所有权：同一时间只有一个 unique_ptr 指向某个对象
+auto host_data = std::make_unique<float[]>(1024);
+// 离开作用域时自动 delete[]
+// 不能拷贝，只能移动
+// auto copy = host_data;                // 编译错误
+auto moved = std::move(host_data);       
+// 此时 host_data 变成 nullptr
+```
+
+### std::shared_ptr
+允许多个指针共享一个对象，内部维护引用计数。
+
+## 0.5 模板
+
+CUDA kernel经常需要支持多种数据类型和多种配置，模板可以用一份代码，编译器自动生成特化版本
+函数模板，类模板
+template <typename T>
+```cpp
+template <typename T>
+__global__ void add(T* a, T* b, T* c, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) c[i] = a[i] + b[i];
+}
+// 调用时指定类型
+add<float><<<grid, block>>>(a_float, b_float, c_float, n);
+```
+### 非类型模板参数 
+编译期常量值，如CUDA block size等 
+template <int BLOCK_SIZE>
+```cpp
+// BLOCK_SIZE 是一个编译期确定的 int 值
+template <int BLOCK_SIZE>
+__global__ void reduce_kernel(float* input, float* output, int n) {
+    __shared__ float shared_data[BLOCK_SIZE];  // 编译期确定大小
+    //
+}
+// 使用——编译成不同版本
+reduce_kernel<256><<<grid, 256>>>(input, output, n);  // BLOCK_SIZE=256
+reduce_kernel<512><<<grid, 512>>>(input, output, n);  // BLOCK_SIZE=512
+```
+多个模板参数：
+```cpp
+template <
+    typename ElementA,          // A 矩阵的元素类型 (float, half)
+    typename ElementB,          // B 矩阵的元素类型
+    typename ElementC,          // C 矩阵的元素类型
+    typename LayoutA,           // A 的内存布局 (RowMajor, ColumnMajor)
+    typename LayoutB,
+    int TileM, int TileN, int TileK  // Tile 大小
+>
+```
+### 模板特化
+某种类型需要特殊处理
+```cpp
+// 通用版本
+template <typename T>
+struct TypeName {
+    static const char* name() { return "unknown"; }
+};
+// 特化版本
+template <>
+struct TypeName<float> {
+    static const char* name() { return "float32"; }
+};
+std::cout << TypeName<float>::name();   // 输出 "float32"
+```
+
+## 0.6 constexpr
+### constexpr 编译期计算
+`constexpr`关键字标记的函数或变量，要求其在编译期就能确定
+constexpr 变量：编译期常量
+constexpr 函数：编译期求值
+
+### if constexpr（C++17）
+在编译期做条件分支，不满足的分支直接消除
+
+### std::is_same_v和类型traits
+`std::is_same_v<T, U>` 在编译期判断两个类型是否相同
+
+## 0.7 命名空间与头文件管理
+### 命名空间namespace 
+避免不同库之间名字冲突
+namespace A{
+namespace B{
+    void func(){}
+}
+}
+
+### 头文件 include
+头文件.h/.hpp包含声明，源文件.cpp/.cu包含定义
+模板函数和constexpr函数的实现在头文件，编译器在编译 main.cpp 时就要看到函数实现，不能等到链接
+### 前向声明
+？
+
+## 0.8 lambda函数
+- Lambda 语法：`[捕获](参数) { 函数体 }`
+- `[=]` 按值捕获，`[&]` 按引用捕获 所有外部参数
+
+## 0.9 cmake和pybind11
