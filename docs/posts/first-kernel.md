@@ -1,3 +1,7 @@
+---
+order: 1
+---
+
 # 第一个 CUDA Kernel：vector_add
 
 > 日期：2026-04-02

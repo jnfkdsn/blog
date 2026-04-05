@@ -1,3 +1,7 @@
+---
+order: 2
+---
+
 # CUDA 基础语法
  
 ## 2. 函数修饰符
@@ -91,3 +95,29 @@ __global__ void matrix_kernel(float* matrix, int width, int height) {
 
 ## 5. 同步机制
 
+### 5.1 CPU GPU 同步
+
+```
+mykernel<<<grid,block>>>(d_data,N);
+cudaDeviceSynchronize();
+cudaMemcpy(h_data,d_data,size,cudaMemcpyDeviceToHost);
+```
+
+### 5.2 block内线程同步 `__syncthreads()`
+```cpp
+__global__ void some_kernel(float* data, int n) {
+    __shared__ float sdata[256];  // Block 内共享的内存
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    // 阶段 1：所有线程把数据加载到 shared memory
+    if (i < n) {
+        sdata[threadIdx.x] = data[i];
+    }
+    __syncthreads();
+    // 同步确保所有线程都完成了写入
+    // 阶段 2：现在可以安全地读取其他线程写入的数据
+    if (threadIdx.x > 0 && i < n) {
+        float left = sdata[threadIdx.x - 1];  // 读取邻居的值
+        // ... 使用 left
+    }
+}
+```
