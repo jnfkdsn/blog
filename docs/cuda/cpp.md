@@ -101,7 +101,7 @@ auto moved = std::move(host_data);
 
 CUDA kernel经常需要支持多种数据类型和多种配置，模板可以用一份代码，编译器自动生成特化版本
 函数模板，类模板
-template <typename T>
+`template <typename T>`
 ```cpp
 template <typename T>
 __global__ void add(T* a, T* b, T* c, int n) {
@@ -113,7 +113,7 @@ add<float><<<grid, block>>>(a_float, b_float, c_float, n);
 ```
 ### 非类型模板参数 
 编译期常量值，如CUDA block size等 
-template <int BLOCK_SIZE>
+`template <int BLOCK_SIZE>`
 ```cpp
 // BLOCK_SIZE 是一个编译期确定的 int 值
 template <int BLOCK_SIZE>
