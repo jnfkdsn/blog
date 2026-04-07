@@ -74,3 +74,4 @@ __shared__ float data[32][33];  // 多加 1 列
 // threadIdx.x=1 → 地址 33*4=132  → Bank 1  (132/4 % 32 = 1)
 // threadIdx.x=2 → 地址 66*4=264  → Bank 2  (264/4 % 32 = 2)
 ```
+
