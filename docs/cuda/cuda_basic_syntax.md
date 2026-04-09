@@ -4,6 +4,28 @@ order: 2
 
 # CUDA 基础语法
  
+## 1. 3090 参数
+| 参数 | 值 |
+|------|-----|
+| **SM 数量** | 82 |
+| **CUDA Cores** | 10496 (128/SM × 82) |
+| **FP32 峰值** | 35.6 TFLOPS |
+| **显存** | 24 GB GDDR6X |
+| **显存带宽** | 936 GB/s |
+| **L2 Cache** | 6 MB |
+| **Shared Memory / SM** | 最大 100 KB（可配置） |
+| **L1 Cache / SM** | shared + L1 共享 128 KB pool |
+| **Registers / SM** | 65536 个 (256 KB) |
+| **Max Threads / SM** | 1536 |
+| **Max Threads / Block** | 1024 |
+| **Max Blocks / SM** | 16 |
+| **Warp Size** | 32 |
+| **Max Warps / SM** | 48 |
+| **Tensor Cores** | 328 (4/SM × 82) |
+| **基础/Boost 频率** | 1395 / 1695 MHz |
+| **TDP** | 350W |
+
+
 ## 2. 函数修饰符
 | 修饰符 | 在哪执行 | 谁能调用 | 典型用途 |
 |--------|---------|---------|---------|
@@ -207,6 +229,40 @@ warp 是在线程块（block）内部，以 32 个线程为一组进行划分的
 ### wrap级操作
 Warp Shuffle：线程间直接交换数据
 同一 Warp 内的线程可以**不经过共享内存**直接读取彼此的寄存器值,不需要__syncthreads()进行同步
+
+常用warp shuffle指令:
+```cpp
+// 从特定的束内线程获取数值，跨线程束值的广播
+T __shfl_sync(unsigned int mask, T var, int srcLane, int width = warpSize);
+// 通过线程束上移获取数值
+T __shfl_up_sync(unsigned int mask, T var, unsigned int delta, int width = warpSize);
+// 通过线程束下移获取数值,在 warp 内实现向下偏移的数据交换,lane ID 为 t 的线程将从 lane ID 为 t + delta 的线程中读取变量 val 的值；若 t + delta >= width，则保留当前线程自身的原始值 val
+T __shfl_down_sync(unsigned int mask, T var, unsigned int delta, int width = warpSize);
+// 按位异或交换数据，lane ID 为 t 的线程将与 lane ID 为 t XOR laneMask 的线程互换值。XOR 保证交换对称，归约后所有 lane 都持有相同结果
+T __shfl_xor_sync(unsigned int mask, T var, unsigned int laneMask, int width = warpSize);
+```
+例如通过__shfl_down_sync() warp内求和
+```cpp
+__device__ float warp_reduce_sum_down(float val) {
+    val += __shfl_down_sync(0xffffffff, val, 16);
+    val += __shfl_down_sync(0xffffffff, val, 8);
+    val += __shfl_down_sync(0xffffffff, val, 4);
+    val += __shfl_down_sync(0xffffffff, val, 2);
+    val += __shfl_down_sync(0xffffffff, val, 1);
+    return val;  // 只有 lane 0 持有正确结果
+}
+```
+而通过__shfl_xor_sync求和则warp内所有线程都持有结果
+
+
+
+
+
+
+
+
+
+
 
 
 ## 10. 原子操作

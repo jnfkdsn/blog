@@ -90,7 +90,7 @@ __global__ void softmax_v1(const float* input, float* output, int M, int N){
 ```
 
 对比CPU的实现：对于[1024,4096]的输入数据
-```
+```cpp
 int block_size = 256;
 int grid_size = M;  // 每行一个 block
 size_t smem_size = block_size * sizeof(float);
@@ -98,9 +98,9 @@ softmax_v1<<<grid_size, block_size, smem_size>>>(d_input, d_output, M, N);
 ```
 得到结果：
 ```
-CPU:  29.392 ms
-GPU:  0.089 ms
-Speedup: 330.2x
+CPU:      39.230 ms
+GPU v1:   0.075 ms  
+Speedup: 524.2x  
 ```
 ### 性能瓶颈分析
 ![NCU分析](./images/softmax_v1.png)
@@ -116,10 +116,11 @@ Memory 远高于 Compute → **memory-bound** kernel。优化方向应该是**�
 | 指标 | 值 | 分析 |
 |------|-----|------|
 | Duration | 78.78 μs | |
-| Registers/Thread | 20 |不会限制 occupancy|
-| Shared Memory | 1.02 KB | 请求 `256 × 4B = 1KB`，每 SM 最大 100KB（Ampere），不构成瓶颈 |
+| Registers/Thread | 20 ||
+| Shared Memory | 1.02 KB ||
 | Block Size | 256 | 8 个 warp|
 | Achieved Occupancy | 87.53% (理论 100%) | 差距约 12%，说明有部分 SM 资源未被完全利用 |
+| Waves per SM | 2.08 | 所有 block 需要分3轮才能让每个 SM 都跑完,最后一轮浪费较多 |
 
 Occupancy = SM 上**实际活跃的 warp 数** / SM 上**理论最大 warp 数**
 RTX 3090（SM86）的硬件限制：
@@ -180,17 +181,17 @@ y[j] = expf(x[j] - row_max) / row_sum;
 ## CUDA实现二：warp shuffle 归约
 ### 核心改进
 使用warp shuffle代替树形归约，消除warp divergence和多余的__syncthreads()
-Warp Shuffle 指令允许同一 Warp 内的线程**直接交换寄存器中的值**，不需要经过 Shared Memory(适用于 归约，扫描，广播等)
+Warp Shuffle 指令允许同一 Warp 内的线程**直接交换寄存器中的值**，不需要经过 Shared Memory(适用于 归约，扫描，广播等) 
 ### Warp 级归约工具函数
 ```cpp
 // Warp 内求最大值
 __device__ float warp_reduce_max(float val) {
-    val = fmaxf(val, __shfl_xor_sync(0xffffffff, val, 16));
+    val = fmaxf(val, __shfl_xor_sync(0xffffffff, val, 16));//XOR 的性质保证交换是对称的（lane 0 和 lane 16 互换），所以每一步之后所有线程都持有相同的归约结果
     val = fmaxf(val, __shfl_xor_sync(0xffffffff, val, 8));
     val = fmaxf(val, __shfl_xor_sync(0xffffffff, val, 4));
     val = fmaxf(val, __shfl_xor_sync(0xffffffff, val, 2));
     val = fmaxf(val, __shfl_xor_sync(0xffffffff, val, 1));
-    return val;  // 所有 lane 都持有 warp 内的 max
+    return val;  // 所有 lane 都持有 warp 内的 max，__shfl_xor_sync天然广播给所有 lane。
 }
 
 // Warp 内求和
@@ -207,8 +208,40 @@ __device__ float warp_reduce_sum(float val) {
 
 ### Block 级归约函数（Warp Shuffle + Shared Memory 混合）
 当 Block 超过一个 Warp（> 32 线程）时，需要两阶段归约：
+```cpp
+__device__ float block_reduce_max(float val){
+    int lane_id = threadIdx.x % 32;
+    int warp_id = threadIdx.x / 32;
+    constexpr int MAX_WARPS = 32;
+    val = warp_reduce_max(val);
+    __shared__ float warp_maxes[MAX_WARPS];
+    if(lane_id == 0){
+        warp_maxes[warp_id] = val;
+    }
+    __syncthreads();
+    int num_warps = blockDim.x / 32;
+    val = (lane_id < num_warps) ? warp_maxes[lane_id] : 0.0f;
+    val = warp_reduce_max(val);
+    return val;
+}
 
+__device__ float block_reduce_sum(float val){
+    int lane_id = threadIdx.x % 32;
+    int warp_id = threadIdx.x / 32;
+    constexpr int MAX_WARPS = 32;
+    __shared__ float warp_sums[MAX_WARPS];
+    val = warp_reduce_sum(val);
+    if(lane_id == 0){
+        warp_sums[warp_id] = val;
+    }
+    __syncthreads();
 
+    int num_warps = blockDim.x / 32;
+    val = (lane_id < num_warps) ? warp_sums[lane_id] : 0.0f;
+    val = warp_reduce_sum(val);
+    return val;
+}
+```
 
 ### V2 完整 Kernel
 ```cpp
@@ -218,5 +251,46 @@ __global__ void softmax_v2(const float* input, float* output, int M, int N) {
     const float* x = input + row * N;
     float* y = output + row * N;
     // Step 1: 求最大值
+    float local_max = -INFINITY;
+    for (int j = tid; j < N; j += blockDim.x) {
+        local_max = fmaxf(local_max, x[j]);
+    }
+    float row_max = block_reduce_max(local_max);
+    //
+    float local_sum = 0.0f;
+    for(int j = tid; j< N; j+=blockDim.x){
+        local_sum += expf(x[j]-row_max); 
+    }
+    float row_sum = block_reduce_sum(local_sum);
+    //
+    for(int j = tid; j<N; j+=blockDim.x){
+        y[j] = expf(x[j]-row_max)/row_sum;
+    }
 }
 ```
+
+### V2 相比 V1 的改进
+归约方式 : v1 Shared memory树形归约 ,每次归约需要同步log(256) = 8次，和8次的smem读写
+v2 : Warp shuffle + shared memory 混合,只需要同步1次，，和五次的shuffle操作
+
+性能比较:
+```
+CPU:      39.230 ms
+GPU v1:   0.075 ms  Speedup: 524.2x  Correctness: PASSED
+GPU v2:   0.072 ms  Speedup: 541.2x  Correctness: PASSED
+v2 vs v1: 1.03x
+```
+
+分析ncu指标：
+Duration [us]	78.78 -> 74.21 提升并不大，global memory 三次访存并未解决
+stall barrier   1.98 -> 1.23 同步次数减少，stall barrier有明显下降
+stall Not Selected 1.22 -> 1.37 GPU有更多的就绪 warp 可供选择
+
+## CUDA实现三：减少global memory访问
+v2中读取global memory三次，第二次和第三次都是读取x[j]做expf(x[j]-row_max)，能否将第二次读取的结果保存到shared memory或寄存器，第三次就不需要读取
+如果使用shared memory，N=4096, block_size=256,每个block需要16KB的shared memory
+限制：
+- 3090 SM 的 SRAM pool shared memory 最大为 100 KB
+- Occupancy : 每个SM的shared memory由驻留block共享，若使用shared memory则驻留block最大为6，刚好48warp，其实也可以。
+
+但是若使用寄存器，256 block 4096 N，每个线程需要多使用16个寄存器，65536个/SM，共32 × 48 = 1536 thread，每个线程可分配42个寄存器，之前使用了20个，也是刚好够用，但是在N较大时 shared memory 或register都会失效。
