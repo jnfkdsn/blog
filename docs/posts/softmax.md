@@ -287,10 +287,247 @@ stall barrier   1.98 -> 1.23 同步次数减少，stall barrier有明显下降
 stall Not Selected 1.22 -> 1.37 GPU有更多的就绪 warp 可供选择
 
 ## CUDA实现三：减少global memory访问
-v2中读取global memory三次，第二次和第三次都是读取x[j]做expf(x[j]-row_max)，能否将第二次读取的结果保存到shared memory或寄存器，第三次就不需要读取
+v2中读取global memory三次，能否将第一次读取的结果保存到shared memory或寄存器，第二，三次就不需要读取
 如果使用shared memory，N=4096, block_size=256,每个block需要16KB的shared memory
 限制：
 - 3090 SM 的 SRAM pool shared memory 最大为 100 KB
 - Occupancy : 每个SM的shared memory由驻留block共享，若使用shared memory则驻留block最大为6，刚好48warp，其实也可以。
 
 但是若使用寄存器，256 block 4096 N，每个线程需要多使用16个寄存器，65536个/SM，共32 × 48 = 1536 thread，每个线程可分配42个寄存器，之前使用了20个，也是刚好够用，但是在N较大时 shared memory 或register都会失效。
+下面尝试使用registers
+```cpp
+template <int BLOCK_SIZE, int ELEMENTS_PER_THREADS>
+__global__ void softmax_v3_reg(const float* input, float* output, int M, int N){
+    int row = blockIdx.x;
+    int tid = threadIdx.x;
+    const float* x = row*N + input;
+    float* y = row*N + output;
+    //
+    float reg[ELEMENTS_PER_THREADS];
+    float local_max = -INFINITY;
+    #pragma unroll
+    for(int k = 0;k< ELEMENTS_PER_THREADS; k++){
+        int j = tid + k * blockDim.x;
+        if(j<N){
+            reg[k] = x[j];
+            local_max = fmaxf(local_max,reg[k]);
+        }else{
+            reg[k] = -INFINITY;
+        }
+    }
+    float row_max = block_reduce_max(local_max);
+
+    float local_sum = 0.0f;
+    #pragma unroll
+    for(int k = 0;k< ELEMENTS_PER_THREADS; k++){
+        int j = tid + blockDim.x * k;
+        if(j<N){
+            reg[k] = expf(reg[k]-row_max);
+            local_sum += reg[k];
+        }
+    }
+    float row_sum = block_reduce_sum(local_sum);
+    #pragma unroll
+    for(int k = 0; k<ELEMENTS_PER_THREADS; k++){
+        int j = tid+k*blockDim.x;
+        if(j<N){
+            y[j] = reg[k]/row_sum;
+        }
+    }
+}
+```
+### 相较于v2的改进：
+主要是将3次global memory的读取改为一次读取，将两次重复expf计算改为一次
+目前只需读一次input 写一次output，理论上访存已经达到最优，但是目前无论使用shared memory还是registers资源都比较紧张，对于较大的N可能无法支持。
+
+`#pragma unroll` 把循环完全展开成N条顺序指令，去掉了 k++、k < N 的比较和跳转指令，编译器能更好地调度load指令，而且不展开编译器可能把reg[]放到local memory
+但是需要在编译期就知道ELEMENTS_PER_THREADS的值，所以需要使用template
+
+- 性能比较：
+```cpp
+CPU:      39.312 ms
+GPU v1:   0.075 ms  Speedup: 524.6x  Correctness: PASSED
+GPU v2:   0.073 ms  Speedup: 541.2x  Correctness: PASSED  (v2 vs v1: 1.03x)
+GPU v3:   0.042 ms  Speedup: 941.4x  Correctness: PASSED  (v3 vs v1: 1.79x)
+```
+相较于v1和v2有了明显的提升
+
+- 分析ncu参数：
+Compute (SM) Throughput [%]	34.85
+Memory Throughput [%]	88.70
+Duration [us]	40 有明显降低
+Stall long scoreboard 28.20 -> 8.16 明显下降
+registers per thread 40 除了存储读取的数据，expf中间值，地址计算，指令调度可能也需要额外的寄存器
+archieved occupancy 87.54->94.57 v2每段之间都需要stall，等待期间warp不算活跃
+memory throughput 686.71->807.85  
+L1/TEX Hit Rate [%]	19.03->0 由于只需要读取1次，l1cache不会命中
+L2 Hit Rate 34.59->50.27 只有写回会命中，约50%
+
+## CUDA实现四：向量化内存访问
+GPU的load/store支持一次读写4，8或16字节，用`float4`一次读四个float比分四次读取更快
+```cpp
+template <int BLOCK_SIZE, int ELEMENTS_PER_THREADS>
+__global__ void softmax_v4(const float* input, float* output, int M, int N){
+    int row = blockIdx.x;
+    int tid = threadIdx.x;
+    const float* x = row*N + input;
+    float* y = row*N + output;
+    constexpr int VEC_SIZE = 4;
+    constexpr int VECS_PER_THREAD = ELEMENTS_PER_THREAD / VEC_SIZE;
+    //
+    float reg[ELEMENTS_PER_THREADS];
+    float local_max = -INFINITY;
+    const float4* x_vec = reinterpret_cast<const float4*>(x);
+    #pragma unroll
+    for(int k = 0;k< VECS_PER_THREADS; k++){
+        int vec_idx = tid + k*BLOCK_SIZE;
+        int elem_idx = k* VEC_SIZE;
+        if(vec_idx * VEC_SIZE < N){
+            float4 v = x_vec[vec_idx];
+            reg[elem_idx+0] = v.x;
+            reg[elem_idx+1] = v.y;
+            reg[elem_idx + 2] = v.z;
+            reg[elem_idx + 3] = v.w;
+            local_max = fmaxf(local_max, fmaxf(fmaxf(v.x, v.y), fmaxf(v.z, v.w)));
+        }
+    }
+    float row_max = block_reduce_max(local_max);
+    float local_sum = 0.0f;
+    #pragma unroll
+    for (int k = 0; k < ELEMENTS_PER_THREAD; k++) {
+        reg[k] = expf(reg[k] - row_max);
+        local_sum += reg[k];
+    }
+    float row_sum = block_reduce_sum(local_sum);
+
+
+    float inv_sum = 1.0f / row_sum;
+    float4* y_vec = reinterpret_cast<float4*>(y);
+    #pragma unroll
+    for (int k = 0; k < VECS_PER_THREAD; k++) {
+        int vec_idx = tid + k * BLOCK_SIZE;
+        int elem_idx = k * VEC_SIZE;
+        if (vec_idx * VEC_SIZE < N) {
+            float4 v;
+            v.x = reg[elem_idx + 0] * inv_sum;
+            v.y = reg[elem_idx + 1] * inv_sum;
+            v.z = reg[elem_idx + 2] * inv_sum;
+            v.w = reg[elem_idx + 3] * inv_sum;
+            y_vec[vec_idx] = v;         // 一次写入 4 个 float
+        }
+    }
+}
+```
+### v4相较于v3的改进
+1. load和store指令从N条减少为N/4条
+2. 若N%4 != 0需要处理尾数
+结果如下
+```
+GPU v3:   0.042 ms  Speedup: 736.1x  Correctness: PASSED  (v3 vs v1: 1.79x)
+GPU v4:   0.041 ms  Speedup: 746.5x  Correctness: PASSED  (v4 vs v1: 1.82x)
+```
+相较于v3的提升不是太多
+ncu指标分析
+Compute (SM) Throughput [%]	34.85->15.60 
+Memory Throughput [%]	89.07
+stall long scoreboard 8.16->18.31 (因为总指令数减少)
+Executed Instructions [inst]	5,685,248->2,531,328 明显减少
+
+## CUDA实现五：online softmax
+核心思想：在遍历过程中动态维护(max,sum)对，当发现新的max时修正之前的sum
+设：
+- 处理到第 $j$ 个元素时，当前的最大值是 $m_j$，修正后的指数和是 $d_j$
+- 来了第 $j+1$ 个元素 $x_{j+1}$
+
+更新规则：
+$$m_{j+1} = \max(m_j, x_{j+1})$$
+$$d_{j+1} = d_j \cdot e^{m_j - m_{j+1}} + e^{x_{j+1} - m_{j+1}}$$
+当max被超过时，之前的指数和需要通过乘e^{m_j - m_{j+1}}来修正
+
+### Online 归约
+```cpp
+struct MaxSum {
+    float max_val;
+    float sum;
+};
+__device__ __forceinline__
+MaxSum combine(MaxSum a, MaxSum b) {
+    float new_max = fmaxf(a.max_val, b.max_val);
+    float new_sum = a.sum * expf(a.max_val - new_max)
+                  + b.sum * expf(b.max_val - new_max);
+    return {new_max, new_sum};
+}
+// Warp 级 Online Reduce
+__device__ MaxSum warp_reduce_online(MaxSum val) {
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        MaxSum other;
+        other.max_val = __shfl_xor_sync(0xffffffff, val.max_val, offset);
+        other.sum = __shfl_xor_sync(0xffffffff, val.sum, offset);
+        val = combine(val, other);
+    }
+    return val;
+}
+// Block 级 Online Reduce
+__device__ MaxSum block_reduce_online(MaxSum val) {
+    int lane_id = threadIdx.x % 32;
+    int warp_id = threadIdx.x / 32;
+    val = warp_reduce_online(val);
+    __shared__ float s_max[32];
+    __shared__ float s_sum[32];
+    if (lane_id == 0) {
+        s_max[warp_id] = val.max_val;
+        s_sum[warp_id] = val.sum;
+    }
+    __syncthreads();
+    int num_warps = blockDim.x / 32;
+    val.max_val = (lane_id < num_warps) ? s_max[lane_id] : -INFINITY;
+    val.sum = (lane_id < num_warps) ? s_sum[lane_id] : 0.0f;
+    val = warp_reduce_online(val);
+    return val; 
+}
+```
+
+### V5: Online Softmax Kernel
+```cpp
+template <int BLOCK_SIZE, int ELEMENTS_PER_THREAD>
+__global__ void softmax_v5(const float* input, float* output, int M, int N) {
+    int row = blockIdx.x;
+    int tid = threadIdx.x;
+    const float* x = input + row * N;
+    float* y = output + row * N;
+    float reg[ELEMENTS_PER_THREAD];
+    //
+    MaxSum local_ms = {-INFINITY, 0.0f};
+    #pragma unroll
+    for (int k = 0; k < ELEMENTS_PER_THREAD; k++) {
+        int j = tid + k * BLOCK_SIZE;
+        if (j < N) {
+            float val = x[j];
+            reg[k] = val;
+            MaxSum new_elem = {val, 1.0f};
+            local_ms = combine(local_ms, new_elem);
+        } else {
+            reg[k] = -INFINITY;
+        }
+    }
+    MaxSum result = block_reduce_online(local_ms);
+    float row_max = result.max_val;
+    float inv_sum = 1.0f / result.sum;
+    // 
+    #pragma unroll
+    for (int k = 0; k < ELEMENTS_PER_THREAD; k++) {
+        int j = tid + k * BLOCK_SIZE;
+        if (j < N) {
+            y[j] = expf(reg[k] - row_max) * inv_sum;
+        }
+    }
+}
+```
+### v5相较于v3/v4
+也是一次读写，但是online softmax在flash attention中，当数据不能全部放入寄存器/shared memory 时，允许以 tile 为单位流式处理（每次只处理一小块，维护全局的 max 和 sum）。
+
+
+
+
+
