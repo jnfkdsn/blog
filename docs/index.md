@@ -8,7 +8,7 @@ hero:
   actions:
     - theme: brand
       text: CUDA 笔记 →
-      link: /cuda/
+      link: /notes/cuda/
     - theme: alt
       text: 实践记录
       link: /posts/

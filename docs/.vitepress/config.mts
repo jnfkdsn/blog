@@ -10,8 +10,14 @@ const vitePressConfig = defineConfig({
   themeConfig: {
     nav: [
       { text: '首页', link: '/' },
-      { text: 'CUDA 笔记', link: '/cuda/' },
+      {
+        text: '学习笔记',
+        items: [
+          { text: 'CUDA', link: '/notes/cuda/' },
+        ]
+      },
       { text: '实践记录', link: '/posts/' },
+      { text: '项目实战', link: '/projects/' },
     ],
 
     outline: {
@@ -33,8 +39,8 @@ const vitePressConfig = defineConfig({
 export default withSidebar(vitePressConfig, [
   {
     documentRootPath: '/docs',
-    scanStartPath: 'cuda',
-    resolvePath: '/cuda/',
+    scanStartPath: 'notes/cuda',
+    resolvePath: '/notes/cuda/',
     useTitleFromFileHeading: true,
     useFolderTitleFromIndexFile: true,
     useFolderLinkFromIndexFile: true,
@@ -46,6 +52,17 @@ export default withSidebar(vitePressConfig, [
     documentRootPath: '/docs',
     scanStartPath: 'posts',
     resolvePath: '/posts/',
+    useTitleFromFileHeading: true,
+    useFolderTitleFromIndexFile: true,
+    useFolderLinkFromIndexFile: true,
+    includeFolderIndexFile: true,
+    sortMenusByFrontmatterOrder: true,
+    frontmatterOrderDefaultValue: 999,
+  },
+  {
+    documentRootPath: '/docs',
+    scanStartPath: 'projects',
+    resolvePath: '/projects/',
     useTitleFromFileHeading: true,
     useFolderTitleFromIndexFile: true,
     useFolderLinkFromIndexFile: true,
