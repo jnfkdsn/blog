@@ -87,25 +87,156 @@ __device__ float warp_reduce_sum(float val) {
     return val;  
 }
 __global__ void reduce_v3(const float* input, float* output, int N) {
-    int gid = blockIdx.x * blockDim.x + threadIdx.x;
+    int gid = blockDim.x * blockIdx.x + threadIdx.x;
     int tid = threadIdx.x;
     int lane = tid % 32;
     int warp_id = tid / 32;
-    float val = (gid < N) ? input[gid] : 0.0f;
+    float val = gid<N?input[gid]:0.0f;
     val = warp_reduce_sum(val);
-    __shared__ float warp_sums[32];  
-    if (lane == 0) {
-        warp_sums[warp_id] = val;
-    }
+    __shared__ float smem[32];
+    if(lane == 0)
+        smem[warp_id] = val;
     __syncthreads();
-    int num_warps = blockDim.x / 32;
-    val = (tid < num_warps) ? warp_sums[tid] : 0.0f;
-    if (warp_id == 0) {
+    //第一个warp最终归约
+    int num_warps = N / blcokDim.x;
+    val = (tid < num_warps) ? smem[warp_id] : 0.0f;
+    if(warp_id==0){
         val = warp_reduce_sum(val);
     }
-
-    if (tid == 0) output[blockIdx.x] = val;
+    if(tid==0) output[blockIdx.x] = val;
 }
 ```
 主要改进为消除了同步的开销
 
+## v4 
+first add + warp shuffle 消除循环开销
+```cpp
+__device__ __forceinline__ float warp_reduce_sum(float val) { //强制内联
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1)
+        val += __shfl_xor_sync(0xFFFFFFFF, val, offset);
+    return val;
+}
+
+template <int BLOCK_SIZE>
+__global__ void reduce_v4(const float* input, float* output, int N) {
+    int gid = (BLCOK_SIZE*2) * blockIdx.x + threadIdx.x;
+    int tid = threadIdx.x;
+    int lane = tid % 32;
+    int warp_id = tid / 32;
+    float val = 0.0f;
+    if(gid<N) val+=input[gid];
+    if(gid+BLOCK_SIZE<N) val+=input[gid+BLOCK_SIZE];
+    val = warp_reduce_sum(val);
+
+    constexpr int NUM_WARPS = BLOCK_SIZE / 32;
+    __shared__ float smem[NUM_WARPS];
+    if(lane == 0)
+        smem[warp_id] = val;
+    __syncthreads();
+    //第一个warp最终归约
+    val = (tid < NUM_WARPS) ? smem[warp_id] : 0.0f;
+    if(warp_id==0){
+        val = warp_reduce_sum(val);
+    }
+    if(tid==0) output[blockIdx.x] = val;
+}
+```
+
+## v5：多block reduce
+### v5.1 多次kernel launch
+```cpp
+typedef void (*ReduceKernel)(const float*, float*, int);
+
+// 递归调用直到只剩 1 个 block 输出
+void launch_multipass(ReduceKernel fn, int bs,
+                      const float* d_in, float* d_out, int N,
+                      float* d_p1, float* d_p2) {
+    int g = (N + bs - 1) / bs;
+    fn<<<g, bs>>>(d_in, d_p1, N);
+    if (g == 1) { cudaMemcpy(d_out, d_p1, sizeof(float), cudaMemcpyDeviceToDevice); return; }
+    int g2 = (g + bs - 1) / bs;
+    fn<<<g2, bs>>>(d_p1, d_p2, g);
+    if (g2 == 1) { cudaMemcpy(d_out, d_p2, sizeof(float), cudaMemcpyDeviceToDevice); return; }
+    fn<<<1, bs>>>(d_p2, d_out, g2);
+}
+```
+
+### v5.2 原子操作
+```cpp
+float atomicAdd(float* addr, float val); 
+/*代价：
+无竞争：不同线程访问不同地址，相当于写入global memory的代价
+有竞争：多线程访问同一地址，串行写入
+*/
+```
+原子操作实现多block归约
+```cpp
+template <int BLOCK_SIZE>
+__global__ void reduce_atomic(const float* input, float* output, int N) {
+    int gid = blockIdx.x * (BLOCK_SIZE * 2) + threadIdx.x;
+    int tid = threadIdx.x;
+    int lane = tid % 32;
+    int warp_id = tid / 32;
+    float val = 0.0f;
+    if (gid < N) val += input[gid];
+    if (gid + BLOCK_SIZE < N) val += input[gid + BLOCK_SIZE];
+    val = warp_reduce_sum(val);
+    constexpr int NUM_WARPS = BLOCK_SIZE / 32;
+    __shared__ float warp_sums[NUM_WARPS];
+    if (lane == 0) warp_sums[warp_id] = val;
+    __syncthreads();
+    if (tid < NUM_WARPS) val = warp_sums[tid];
+    else val = 0.0f;
+    if (warp_id == 0) {
+        val = warp_reduce_sum(val);
+    }
+    // 关键区别: 使用 atomicAdd 汇总所有 block 的结果
+    if (tid == 0) {
+        atomicAdd(output, val);  // ← output 被初始化为 0
+    }
+}
+```
+对比：
+5.1 无竞争，需要多次的kernel launch开销
+5.2 单次kernel launch，grid较大时会有竞争
+
+## CUB库 reduce
+```cpp
+#include <cub/cub.cuh>
+//block-level reduce
+__global__ void reduce_cub_block(const float* input, float* output, int N){
+    typedef cub::BlockReduce<float, 256> BlockReduce;
+    __shared__ typename BlockReduce::TempStorage temp;
+    int gid = blockIdx.x * blockDim.x + threadIdx.x;
+    float val = (gid < N) ? input[gid] : 0.0f;
+    // 一行代码完成 block 内归约
+    float block_sum = BlockReduce(temp).Sum(val);
+    if (threadIdx.x == 0) output[blockIdx.x] = block_sum;
+}
+
+//device-level reduce
+void reduce_cub_device(const float* input, float* output, int N) {
+    // 查询需要的临时存储大小
+    size_t temp_bytes = 0;
+    cub::DeviceReduce::Sum(nullptr, temp_bytes, input, output, N);
+    // 分配临时存储
+    void* temp_storage;
+    cudaMalloc(&temp_storage, temp_bytes);
+    // 执行归约
+    cub::DeviceReduce::Sum(temp_storage, temp_bytes, input, output, N);
+    cudaFree(temp_storage);
+}
+
+```
+
+性能比较：
+```
+N=1048576   N=134217728
+v1:0.052    v1:5.937
+v2:0.031    v2:3.063
+v3:0.029    v3:3.343
+v4:0.024    v4:2.208
+CUB:0.014   CUB:2.176
+```
+N较小时，CUB只需一般kernel launch，所以比v4要快，较大时基本持平
