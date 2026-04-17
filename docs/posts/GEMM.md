@@ -96,7 +96,7 @@ AI(HBM_V1) = FLOPs/Bytes = 2N^3/8N^3 = 0.25
   cuBLAS SGEMM        :   11.162 ms  |   12313.6 GFLOPS
 ```
 
-## CUDA V2
+## CUDA V2 ： block tile
 分块乘法:让一个线程块负责一个tile，加载对应的A,B tile到shared memory，然后从shared memory中读取做计算
 ```
 分块矩阵乘法:
@@ -206,4 +206,185 @@ matmul_v2<<<grid, block>>>(A, B, C, M, N, K);
 	每次从 SMEM 读一个数，只用于 1 次运算就丢掉了，没有复用。
 ```
 
-## CUDA V3
+## CUDA V3 ：thread tile
+V2 的瓶颈：每个线程只算 1 个 C 元素 → 计算/访存比太低。
+
+**核心思想**：让每个线程算 $TM \times TN$ 个 C 元素。这些元素共享 A 的同一行和 B 的同一列（在 tile 内），从 SMEM 读一次 A 值可以被 TN 次乘法复用。
+
+```
+C 矩阵 [M × N]
+│
+├── Grid 维度 (blockIdx):
+│     gridDim.x = N / BN,  gridDim.y = M / BM
+│     → 每个 block 负责 C 的一个 BM×BN 的子块
+│
+├── Block 维度 (blockDim / threadIdx):
+│     blockDim.x = BN/TN = 16
+│     blockDim.y = BM/TM = 16
+│     → 一个 block 里有 16×16 = 256 个线程
+│
+└── Thread 维度 (寄存器):
+      每个线程负责 TM×TN = 8×8 = 64 个 C 元素
+```
+
+```cpp
+#define BM 128
+#define BN 128
+#define BK 8
+#define TM 8
+#define TN 8
+__global__ void matmul_v3(const float* A, const float* B, float* C, int M, int N, int K){
+	int tx = threadIdx.x, ty = threadIdx.y;
+	int bx = blockIdx.x, by = blockIdx.y;
+	
+    int thread_row = ty * TM;
+    int thread_col = tx * TN; 
+
+    __shared__ float As[BM][BK];
+    __shared__ float Bs[BK][BN];
+
+    float regC[TM][TN] = {0.0f};
+    float regA[TM];
+    float regB[TN];
+
+    int numThreads = blockDim.x * blockDim.y; //256
+    int linearIdx = ty * blockDim.x + tx;
+
+    for(int t=0; t<(K+BK-1)/BK;t++){
+		for(int i=0; i<BM*BK/num_threads; i++){
+			int loadIdx = linearIdx + i * numThreads; //thread0 加载 0，256，512，768
+            int loadRow = loadIdx / BK;
+            int loadCol = loadIdx % BK;
+            int globalRow = by * BM + loadRow;
+            int globalCol = t * BK + loadCol;
+            As[loadRow][loadCol] = (globalRow < M && globalCol < K)
+                                    ? A[globalRow * K + globalCol] : 0.0f;
+		}
+
+		for(int i=0; i<BK*BN/num_threads;i++){
+			int loadIdx = linearIdx + i * num_threads;
+			int loadRow = loadIdx / BN;
+			int loadCol = loadIdx % BN;
+			int globalRow = loadRow + t * BK;
+			int globalCol = loadCol + bx * BN;
+			Bs[loadRow][loadCol] = (globalRow < K && globalCol < N)
+						? B[globalRow * N + globalCol] : 0.0f;
+		}
+        // --- 寄存器级别计算 ---
+        #pragma unroll
+        for (int k = 0; k < BK; k++) {
+            // 加载 A 的 TM 个值到寄存器
+            #pragma unroll
+            for (int m = 0; m < TM; m++) {
+                regA[m] = As[threadRow + m][k];
+            }
+            // 加载 B 的 TN 个值到寄存器
+            #pragma unroll
+            for (int n = 0; n < TN; n++) {
+                regB[n] = Bs[k][threadCol + n];
+            }
+            // 外积: TM × TN 次 FMA
+            #pragma unroll
+            for (int m = 0; m < TM; m++) {
+                #pragma unroll
+                for (int n = 0; n < TN; n++) {
+                    regC[m][n] += regA[m] * regB[n];
+                }
+            }
+        }
+        __syncthreads();
+    }
+
+	//写回C
+	for(int i=0; i<TM; i++){
+		for(int j=0; j<TN; j++){
+			int globalRow = thread_row + by * BM + i;
+			int globalCol = thread_col + bx * BN + j;
+			if(globalRow<M&&globalCol<N){
+				C[globalRow*N+globalCol] = regC[i][j];
+			}
+		}
+	}
+}
+// 调用
+dim3 block(BN / TN, BM / TM);  // (16, 16) = 256 threads
+dim3 grid((N + BN - 1) / BN, (M + BM - 1) / BM);
+matmul_v3<<<grid, block>>>(A, B, C, M, N, K);
+```
+### 资源分析
+``` cpp
+寄存器使用:
+  regC[8][8] = 64 个寄存器
+  regA[8]    = 8 个寄存器
+  regB[8]    = 8 个寄存器
+  其他临时变量 ≈ 16 个寄存器
+  总计: 96 个寄存器/线程
+
+  SM 8.6: 65536 个寄存器/SM
+  → 最大 active 线程 = 65536 / 96 ≈ 682 → 实际 640 (向下取整到 warp 的倍数)
+  → 256 线程/block → 可以有 2 个 active block/SM
+  → Occupancy ≈ 640 / 1536 ≈ 42%
+
+  虽然 occupancy 不高，但 register tiling 提供的高计算密度
+  弥补了低 occupancy 带来的延迟隐藏损失。
+
+SMEM 使用:
+  As[128][8] + Bs[8][128] = 1024 + 1024 = 2048 float = 8 KB
+  → SMEM 不是瓶颈
+```
+
+### As 读取的coalescing 问题：
+```
+  内存地址分布 (K=1024, 每格=4 bytes):
+
+  Thread  0-7:  地址 base+0, +4, +8, ..., +28          ← Cache line 1
+  Thread  8-15: 地址 base+4096, +4100, ..., +4124       ← Cache line 2 (跨越 K=1024*4=4KB)
+  Thread 16-23: 地址 base+8192, ...                     ← Cache line 3
+  Thread 24-31: 地址 base+12288, ...                    ← Cache line 4
+
+  每个 cache line 128 bytes = 32 个 float
+  但每次只用 8 个 float → 利用率 8/32 = 25%
+  
+  1 个 warp 加载 A tile 触发 4 条 cache line 事务
+  可以通过转置加载As解决：
+  // 原始: As[BM][BK]，按原始布局存
+  // 修改: As[BK][BM]，加载时做转置
+  __shared__ float As[BK][BM];  
+
+  // 让 warp 内 32 个线程沿 BM 方向(行方向)连续访问 A，而不是沿 BK 方向
+  int loadRow_A = linearIdx / BM;   // 0..7 (BK=8)
+  int loadCol_A = linearIdx % BM;   // 0..127 (BM=128)
+
+  // 全局: A[by*BM + loadCol_A][t*BK + loadRow_A]
+  // 存入: As[loadRow_A][loadCol_A]  
+  globalRow = by * BM + loadCol_A;
+  globalCol = t  * BK + loadRow_A;
+  As[loadRow_A][loadCol_A] = A[globalRow * K + globalCol];
+```
+### 性能分析：
+```
+===== M = N = K = 512 =====
+  V1 Naive            :    0.134 ms  |    2004.9 GFLOPS
+  V2 Shared Tiling    :    0.124 ms  |    2160.2 GFLOPS
+  V3 Reg Tile         :    0.121 ms  |    2212.2 GFLOPS
+  cuBLAS SGEMM        :    0.025 ms  |   10721.6 GFLOPS
+
+===== M = N = K = 1024 =====
+  V1 Naive            :    0.992 ms  |    2164.7 GFLOPS
+  V2 Shared Tiling    :    0.811 ms  |    2646.9 GFLOPS
+  V3 Reg Tile         :    0.294 ms  |    7307.1 GFLOPS
+  cuBLAS SGEMM        :    0.117 ms  |   18347.8 GFLOPS
+
+===== M = N = K = 4096 =====
+  V1 Naive            :   61.804 ms  |    2223.8 GFLOPS
+  V2 Shared Tiling    :   46.093 ms  |    2981.8 GFLOPS
+  V3 Reg Tile         :    9.639 ms  |   14258.8 GFLOPS
+  cuBLAS SGEMM        :    5.984 ms  |   22967.5 GFLOPS
+```
+
+
+## CUDA v4 : 向量化加载
+使用float4读取A,B数据
+```cpp
+
+```
