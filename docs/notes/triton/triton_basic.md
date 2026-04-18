@@ -256,7 +256,7 @@ mask = offsets < 100          # 用 mask 处理多余的部分
 
 ### 4. 跨 Block 通信
 
-Triton 的编程模型是**每个 program 独立**的，没有直接支持跨 program（跨 block）通信的机制。
+Triton 的编程模型是**每个 program 独立**的，没有直接支持跨 program（跨 block）通信的机制, **它天然适合一个 program 能独立完成的计算**。需要跨 program 通信的场景，CUDA 更灵活
 
 如果需要全局归约（如对整个 tensor 求 sum），需要：
 - 先在每个 program 内做局部归约
@@ -279,3 +279,4 @@ Triton 的 JIT 编译在首次调用时需要几秒到几十秒（尤其是 auto
 - Triton 编译器的 shared memory 布局选择可能不是最优的
 - 无法使用 PTX 内联汇编做微指令级优化
 - 无法精确控制 warp scheduling
+
