@@ -128,6 +128,50 @@ accumulator += tl.dot(a, b)
 - 要求输入维度是 16 的倍数（Tensor Core 的原子操作是 16×16）
 - 累加结果通常保持 float32 精度，即使输入是 float16
 
+### naive triton gemm对比CUDA gemm
+1. v2分块乘法
+```python
+for k in range(0, K, BLOCK_SIZE_K):
+    a = tl.load(...)
+    b = tl.load(...)
+    accumulator += tl.dot(a, b)
+    a_ptrs += BLOCK_SIZE_K * stride_ak
+    b_ptrs += BLOCK_SIZE_K * stride_bk
+```
+- 一个program负责一个 BLOCK_SIZE_M × BLOCK_SIZE_N 的输出 tile
+- 每次处理的是 `A[BM,BK]` 和 `B[BK,BN]` 子块。
+
+2. v3寄存器
+program 内部如何分给线程/warp由编译器决定
+结果上通常也会出现“每线程累加多个元素”
+
+3. v4向量化合并访存
+```python
+a = tl.load(a_ptrs, mask=a_mask, other=0.0)
+b = tl.load(b_ptrs, mask=b_mask, other=0.0)
+```
+编译器会基于地址模式自动做：
+- 合并访存（coalescing）
+- 合适的向量化宽度选择（如 128-bit load/store）
+
+4. 双缓冲
+没有显式写双缓冲逻辑
+
+- Triton 后端可能做一定的软件流水化，效果上接近 N-stage buffering
+
+
+
+
 
 ## L2 Cache 优化：Super-Grouping
 
+CUDA/triton默认按行优先顺序调度block/program，
+对于横向的四个block：
+SM0: Block(bx=0,by=0)  SM1: Block(bx=1,by=0) SM2: Block(bx=2,by=0)  SM3: Block(bx=3,by=0)
+在第 t=0 次迭代，4 个 SM 同时加载的 B 片段:
+SM0: B[0:8,   0:128]   SM1: B[0:8, 128:256]
+SM2: B[0:8, 256:384]   SM3: B[0:8, 384:512]
+→ 4 个片段互不重叠，无任何共享
+当 N 很大时，处理 `(0,0)` 加载的 B 的第 0 列 tile 在处理 `(0,7)` 时很可能已经被 L2 Cache 驱逐了。而 `(1,0)` 又需要重新从 HBM 加载 B 的第 0-8 列——**B 的同一列被反复从 HBM 加载**，B 在 L2 cache命中率较低，但是A都能命中。
+
+### 解决方案：按小组遍历

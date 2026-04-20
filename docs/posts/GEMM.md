@@ -37,20 +37,6 @@ Ridge Point = 35.6 TFLOPS / 936 GB/s ≈ 38 FLOPs/Byte
 对于较大的n，是严重compute-bound
 ```
 
-### CPU实现
-```cpp
-void matmul_cpu(const float* A, const float* B, float* C, int M, int N, int K){
-    for(int i=0;i<M;i++){
-        for(int j=0;j<N;j++){
-            float sum = 0.0f;
-            for(int k=0;k<K;k++){
-                sum+=A[K*i+k]*B[k*N+j];
-            }
-            C[N*i+j]=sum;
-        }
-    }
-}
-```
 
 ## CUDA V1
 每个线程算一个元素
@@ -123,58 +109,7 @@ $$\text{V1 HBM} = 8n^3$$
 
 $$\text{加速比} = T \quad (\text{例如 } T = 32 \text{ 时，HBM 流量降低 32x})$$
 
-```cpp
-#define BM 32
-#define BN 32
-#define BK 32
 
-__global__ void matmul_v2(const float* A, const float* B, float* C,int M, int N, int K) {
-	// 每个 block 负责 C 的一个 BM × BN tile
-	__shared__ float As[BM][BK];
-	__shared__ float Bs[BK][BN];
-
-	int bx = blockIdx.x, by = blockIdx.y;
-	int tx = threadIdx.x, ty = threadIdx.y;
-
-	// 行由 blockIdx.y 决定，列由 blockIdx.x 决定
-	int row = by * BM + ty;
-	int col = bx * BN + tx;
-
-	float sum = 0.0f;
-	for(int t = 0; t < (K + BK - 1) / BK; t++){
-		// 加载 A tile: A[row][t*BK + tx]
-		int a_col = t * BK + tx;
-		if(row < M && a_col < K){
-			As[ty][tx] = A[row * K + a_col];
-		}
-		else{
-			As[ty][tx] = 0.0f;
-		}
-		// 加载 B tile: B[t*BK + ty][col]
-		int b_row = t * BK + ty;
-		if(b_row < K && col < N){
-			Bs[ty][tx] = B[b_row * N + col];
-		}
-		else{
-			Bs[ty][tx] = 0.0f;
-		}
-		__syncthreads();
-
-		#pragma unroll
-		for(int i = 0; i < BK; i++){
-			sum += As[ty][i] * Bs[i][tx];
-		}
-		__syncthreads();
-	}
-	if(row < M && col < N){
-		C[row * N + col] = sum;
-	}
-}
-// 调用
-dim3 block(BN, BM);   // 32 × 32 = 1024 threads
-dim3 grid((N + BN - 1) / BN, (M + BM - 1) / BM);
-matmul_v2<<<grid, block>>>(A, B, C, M, N, K);
-```
 ### 性能分析
 ```
 ===== M = N = K = 512 =====
@@ -227,90 +162,31 @@ C 矩阵 [M × N]
       每个线程负责 TM×TN = 8×8 = 64 个 C 元素
 ```
 
-```cpp
-#define BM 128
-#define BN 128
-#define BK 8
-#define TM 8
-#define TN 8
-__global__ void matmul_v3(const float* A, const float* B, float* C, int M, int N, int K){
-	int tx = threadIdx.x, ty = threadIdx.y;
-	int bx = blockIdx.x, by = blockIdx.y;
-	
-    int thread_row = ty * TM;
-    int thread_col = tx * TN; 
 
-    __shared__ float As[BM][BK];
-    __shared__ float Bs[BK][BN];
-
-    float regC[TM][TN] = {0.0f};
-    float regA[TM];
-    float regB[TN];
-
-    int numThreads = blockDim.x * blockDim.y; //256
-    int linearIdx = ty * blockDim.x + tx;
-
-    for(int t=0; t<(K+BK-1)/BK;t++){
-		for(int i=0; i<BM*BK/num_threads; i++){
-			int loadIdx = linearIdx + i * numThreads; //thread0 加载 0，256，512，768
-            int loadRow = loadIdx / BK;
-            int loadCol = loadIdx % BK;
-            int globalRow = by * BM + loadRow;
-            int globalCol = t * BK + loadCol;
-            As[loadRow][loadCol] = (globalRow < M && globalCol < K)
-                                    ? A[globalRow * K + globalCol] : 0.0f;
-		}
-
-		for(int i=0; i<BK*BN/num_threads;i++){
-			int loadIdx = linearIdx + i * num_threads;
-			int loadRow = loadIdx / BN;
-			int loadCol = loadIdx % BN;
-			int globalRow = loadRow + t * BK;
-			int globalCol = loadCol + bx * BN;
-			Bs[loadRow][loadCol] = (globalRow < K && globalCol < N)
-						? B[globalRow * N + globalCol] : 0.0f;
-		}
-        // --- 寄存器级别计算 ---
-        #pragma unroll
-        for (int k = 0; k < BK; k++) {
-            // 加载 A 的 TM 个值到寄存器
-            #pragma unroll
-            for (int m = 0; m < TM; m++) {
-                regA[m] = As[threadRow + m][k];
-            }
-            // 加载 B 的 TN 个值到寄存器
-            #pragma unroll
-            for (int n = 0; n < TN; n++) {
-                regB[n] = Bs[k][threadCol + n];
-            }
-            // 外积: TM × TN 次 FMA
-            #pragma unroll
-            for (int m = 0; m < TM; m++) {
-                #pragma unroll
-                for (int n = 0; n < TN; n++) {
-                    regC[m][n] += regA[m] * regB[n];
-                }
-            }
-        }
-        __syncthreads();
-    }
-
-	//写回C
-	for(int i=0; i<TM; i++){
-		for(int j=0; j<TN; j++){
-			int globalRow = thread_row + by * BM + i;
-			int globalCol = thread_col + bx * BN + j;
-			if(globalRow<M&&globalCol<N){
-				C[globalRow*N+globalCol] = regC[i][j];
-			}
-		}
-	}
-}
-// 调用
-dim3 block(BN / TN, BM / TM);  // (16, 16) = 256 threads
-dim3 grid((N + BN - 1) / BN, (M + BM - 1) / BM);
-matmul_v3<<<grid, block>>>(A, B, C, M, N, K);
+---
+**V3 每个线程在做什么**
+Block 负责 C 的一个 128×128 子块。256 个线程把这个子块均匀分成 16×16 = 256 份，每份 8×8。
 ```
+Thread(ty, tx) 负责 C 中的:
+  行: [ty*8 .. ty*8+7]
+  列: [tx*8 .. tx*8+7]
+
+thread_row = ty * 8
+thread_col = tx * 8
+```
+对 K 维度每次迭代 BK=8 列：
+```
+for t in 0..K/8:
+  1. 所有线程协作把 A[128行×8列] 加载到 As[128][8]
+  2. 所有线程协作把 B[8行×128列] 加载到 Bs[8][128]
+  3. 每个线程用自己的 8×8 区域做计算:
+     for k in 0..7:
+       regA[0..7] = As[thread_row + 0..7][k]   ← 从 As 取 8 个行值
+       regB[0..7] = Bs[k][thread_col + 0..7]   ← 从 Bs 取 8 个列值
+       做外积: regC[m][n] += regA[m] * regB[n]  ← 8×8=64 次 FMA
+```
+
+
 ### 资源分析
 ``` cpp
 寄存器使用:
@@ -344,23 +220,60 @@ SMEM 使用:
 
   每个 cache line 128 bytes = 32 个 float
   但每次只用 8 个 float → 利用率 8/32 = 25%
+
+  可以通过转置 As 为 As[BK][BM]解决？
   
-  1 个 warp 加载 A tile 触发 4 条 cache line 事务
-  可以通过转置加载As解决：
-  // 原始: As[BM][BK]，按原始布局存
-  // 修改: As[BK][BM]，加载时做转置
-  __shared__ float As[BK][BM];  
-
-  // 让 warp 内 32 个线程沿 BM 方向(行方向)连续访问 A，而不是沿 BK 方向
-  int loadRow_A = linearIdx / BM;   // 0..7 (BK=8)
-  int loadCol_A = linearIdx % BM;   // 0..127 (BM=128)
-
-  // 全局: A[by*BM + loadCol_A][t*BK + loadRow_A]
-  // 存入: As[loadRow_A][loadCol_A]  
-  globalRow = by * BM + loadCol_A;
-  globalCol = t  * BK + loadRow_A;
-  As[loadRow_A][loadCol_A] = A[globalRow * K + globalCol];
 ```
+```
+对于M=N=K=1024,BM=BN=128,BK=8,TM=TN=8
+
+  HBM 读取: n^3/16 = 64MB
+  AI = 32 FLOPs/Byte < 38
+  仍是memory-bound
+
+```
+
+### As 和Bs Bank conflict
+
+**SMEM Bank Conflict**：V3 的 Bs 存在 4-way bank conflict，As 存在 2-way conflict（详见下方分析）。
+Warp 0 = linearIdx 0..31，包含 ty=0,tx=0..15 和 ty=1,tx=0..15：
+```
+对于Bs
+thread_col = tx * 8，只跟 tx 有关，warp 0 的 tx 只有 0..15
+读 Bs[k][thread_col + n] 时（比如 n=0）：
+  tx=0  → col=0   → bank 0
+  tx=1  → col=8   → bank 8
+  tx=2  → col=16  → bank 16
+  tx=3  → col=24  → bank 24
+  tx=4  → col=32  → bank 0  ← 不同地址，同 bank → conflict!
+  tx=5  → col=40  → bank 8
+  tx=6  → col=48  → bank 16
+  tx=7  → col=56  → bank 24
+  tx=8  → col=64  → bank 0  ← conflict!
+  tx=9  → col=72  → bank 8
+  tx=10 → col=80  → bank 16
+  tx=11 → col=88  → bank 24
+  tx=12 → col=96  → bank 0  ← conflict!
+  tx=13 → col=104 → bank 8
+  tx=14 → col=112 → bank 16
+  tx=15 → col=120 → bank 24
+  ty=1 的 16 个线程 → 读同地址 → broadcast，无冲突
+bank 0 被 tx=0,4,8,12 四个不同地址访问 → 4-way conflict
+
+对于As
+ty=0, tx=0..15 (T0..T15):  thread_row=0 → 全部读 As[m][k]   → 16线程同地址 → broadcast
+ty=1, tx=0..15 (T16..T31): thread_row=8 → 全部读 As[8+m][k] → 16线程同地址 → broadcast
+
+As[row][col] 的 bank = (row * 8 + col) % 32
+
+As[m][k]:     bank = (m*8 + k) % 32
+As[8+m][k]:   bank = ((8+m)*8 + k) % 32 = (8m + 64 + k) % 32
+                                          = (8m + k) % 32   ← 64%32=0，抵消了！
+
+→ 两个地址在同一个 bank → 2-way conflict
+```
+
+
 ### 性能分析：
 ```
 ===== M = N = K = 512 =====
@@ -381,10 +294,299 @@ SMEM 使用:
   V3 Reg Tile         :    9.639 ms  |   14258.8 GFLOPS
   cuBLAS SGEMM        :    5.984 ms  |   22967.5 GFLOPS
 ```
+n较小时无法填满SM，是occupancy-bound
 
 
 ## CUDA v4 : 向量化加载
-使用float4读取A,B数据
+使用float4读取A,B数据，减少load指令数量，
 ```cpp
+#define BM 128
+#define BN 128
+#define BK 8
+#define TM 8
+#define TN 8
+
+__global__ void matmul_v4(const float* A, const float* B, float* C,
+                          int M, int N, int K) {
+    __shared__ float As[BM][BK];
+    __shared__ float Bs[BK][BN];
+
+    int bx = blockIdx.x, by = blockIdx.y;
+    int tx = threadIdx.x, ty = threadIdx.y;
+    int threadRow = ty * TM;
+    int threadCol = tx * TN;
+
+    float regC[TM][TN] = {0.0f};
+    float regA[TM], regB[TN];
+
+    int numThreads = blockDim.x * blockDim.y;
+    int linearIdx = ty * blockDim.x + tx;
+
+    for (int t = 0; t < (K + BK - 1) / BK; t++) {
+        // --- 向量化加载 A tile ---
+        // A tile: BM × BK = 128 × 8 = 1024 float = 256 个 float4
+        // 256 线程，每线程加载 1 个 float4
+        {
+            int loadIdx = linearIdx;  // 每线程 1 个 float4
+            int loadRow = loadIdx / (BK / 4);  // BK/4 = 2 个 float4 每行
+            int loadCol = (loadIdx % (BK / 4)) * 4;
+            int globalRow = by * BM + loadRow;
+            int globalCol = t * BK + loadCol;
+
+            if (globalRow < M && globalCol + 3 < K) {
+                float4 tmp = reinterpret_cast<const float4*>(
+                    &A[globalRow * K + globalCol])[0];
+                As[loadRow][loadCol]     = tmp.x;
+                As[loadRow][loadCol + 1] = tmp.y;
+                As[loadRow][loadCol + 2] = tmp.z;
+                As[loadRow][loadCol + 3] = tmp.w;
+            } else {
+                // 边界处理：逐个加载
+                for (int i = 0; i < 4; i++) {
+                    As[loadRow][loadCol + i] =
+                        (globalRow < M && globalCol + i < K)
+                        ? A[globalRow * K + globalCol + i] : 0.0f;
+                }
+            }
+        }
+
+        // --- 向量化加载 B tile ---
+        // B tile: BK × BN = 8 × 128 = 1024 float = 256 个 float4
+        {
+            int loadIdx = linearIdx;
+            int loadRow = loadIdx / (BN / 4);
+            int loadCol = (loadIdx % (BN / 4)) * 4;
+            int globalRow = t * BK + loadRow;
+            int globalCol = bx * BN + loadCol;
+
+            if (globalRow < K && globalCol + 3 < N) {
+                float4 tmp = reinterpret_cast<const float4*>(
+                    &B[globalRow * N + globalCol])[0];
+                Bs[loadRow][loadCol]     = tmp.x;
+                Bs[loadRow][loadCol + 1] = tmp.y;
+                Bs[loadRow][loadCol + 2] = tmp.z;
+                Bs[loadRow][loadCol + 3] = tmp.w;
+            } else {
+                for (int i = 0; i < 4; i++) {
+                    Bs[loadRow][loadCol + i] =
+                        (globalRow < K && globalCol + i < N)
+                        ? B[globalRow * N + globalCol + i] : 0.0f;
+                }
+            }
+        }
+
+        __syncthreads();
+
+        // --- 计算（和 V3 相同）---
+        #pragma unroll
+        for (int k = 0; k < BK; k++) {
+            #pragma unroll
+            for (int m = 0; m < TM; m++) regA[m] = As[threadRow + m][k];
+            #pragma unroll
+            for (int n = 0; n < TN; n++) regB[n] = Bs[k][threadCol + n];
+            #pragma unroll
+            for (int m = 0; m < TM; m++)
+                #pragma unroll
+                for (int n = 0; n < TN; n++)
+                    regC[m][n] += regA[m] * regB[n];
+        }
+
+        __syncthreads();
+    }
+
+    // --- 向量化写回 C ---
+    for (int m = 0; m < TM; m++) {
+        int globalRow = by * BM + threadRow + m;
+        if (globalRow < M) {
+            for (int n = 0; n < TN; n += 4) {
+                int globalCol = bx * BN + threadCol + n;
+                if (globalCol + 3 < N) {
+                    float4 tmp = {regC[m][n], regC[m][n+1],
+                                  regC[m][n+2], regC[m][n+3]};
+                    reinterpret_cast<float4*>(
+                        &C[globalRow * N + globalCol])[0] = tmp;
+                } else {
+                    for (int i = 0; i < 4 && globalCol + i < N; i++)
+                        C[globalRow * N + globalCol + i] = regC[m][n + i];
+                }
+            }
+        }
+    }
+}
+```
+
+> - `float4` 读取要求**16-byte 对齐**。`A[globalRow * K + globalCol]` 必须是 16 的倍数（字节地址）。当 K 不是 4 的倍数时，float4 加载可能跨页 → 要特殊处理边界。
+
+
+## CUDA V5 双缓冲
+V2-V4 的流水线中，**加载**和**计算**是交替进行的：
 
 ```
+V4 的执行时间线（一个 tile 迭代）:
+
+  ┌────────────────┬─────────────────────┬────────────────┬──────...
+  │ Load tile t    │ Compute tile t      │ Load tile t+1  │ Comp...
+  │ (HBM → SMEM)  │ (SMEM → Reg → FMA)  │ (HBM → SMEM)  │
+  └────────────────┴─────────────────────┴────────────────┴──────...
+       idle compute      idle memory          idle compute
+
+  加载和计算互相等待 → pipeline bubble
+```
+
+**双缓冲**：用**两份 shared memory**，一份给当前计算，一份给下一次预取。
+
+```
+双缓冲流水线:
+
+  SMEM Buffer A (下标 0):  ████ Load t   ↓              ████ Load t+2
+  SMEM Buffer B (下标 1):            ████ Load t+1               ████ Load t+3
+  Compute:                      ████ Comp t  ████ Comp t+1  ████ Comp t+2
+                           ─────────────────────────────────────────────→ time
+
+  加载 tile t+1 和计算 tile t 重叠 → 隐藏内存延迟
+```
+
+```cpp
+#define BM 128
+#define BN 128
+#define BK 8
+#define TM 8
+#define TN 8
+
+__global__ void matmul_v5(const float* A, const float* B, float* C,
+                          int M, int N, int K) {
+    // 双缓冲: 2 份 SMEM
+    __shared__ float As[2][BM][BK];
+    __shared__ float Bs[2][BK][BN];
+
+    int bx = blockIdx.x, by = blockIdx.y;
+    int tx = threadIdx.x, ty = threadIdx.y;
+    int threadRow = ty * TM;
+    int threadCol = tx * TN;
+
+    float regC[TM][TN] = {0.0f};
+    float regA[TM], regB[TN];
+
+    int numThreads = blockDim.x * blockDim.y;
+    int linearIdx = ty * blockDim.x + tx;
+    int numTiles = (K + BK - 1) / BK;
+
+    // ===== 预加载第一个 tile (buffer 0) =====
+    auto load_tile = [&](int buf, int t) {
+        // Load A tile
+        {
+            int loadIdx = linearIdx;
+            int loadRow = loadIdx / (BK / 4);
+            int loadCol = (loadIdx % (BK / 4)) * 4;
+            int globalRow = by * BM + loadRow;
+            int globalCol = t * BK + loadCol;
+            if (globalRow < M && globalCol + 3 < K) {
+                float4 tmp = reinterpret_cast<const float4*>(
+                    &A[globalRow * K + globalCol])[0];
+                As[buf][loadRow][loadCol]     = tmp.x;
+                As[buf][loadRow][loadCol + 1] = tmp.y;
+                As[buf][loadRow][loadCol + 2] = tmp.z;
+                As[buf][loadRow][loadCol + 3] = tmp.w;
+            } else {
+                for (int i = 0; i < 4; i++)
+                    As[buf][loadRow][loadCol + i] =
+                        (globalRow < M && globalCol + i < K)
+                        ? A[globalRow * K + globalCol + i] : 0.0f;
+            }
+        }
+        // Load B tile
+        {
+            int loadIdx = linearIdx;
+            int loadRow = loadIdx / (BN / 4);
+            int loadCol = (loadIdx % (BN / 4)) * 4;
+            int globalRow = t * BK + loadRow;
+            int globalCol = bx * BN + loadCol;
+            if (globalRow < K && globalCol + 3 < N) {
+                float4 tmp = reinterpret_cast<const float4*>(
+                    &B[globalRow * N + globalCol])[0];
+                Bs[buf][loadRow][loadCol]     = tmp.x;
+                Bs[buf][loadRow][loadCol + 1] = tmp.y;
+                Bs[buf][loadRow][loadCol + 2] = tmp.z;
+                Bs[buf][loadRow][loadCol + 3] = tmp.w;
+            } else {
+                for (int i = 0; i < 4; i++)
+                    Bs[buf][loadRow][loadCol + i] =
+                        (globalRow < K && globalCol + i < N)
+                        ? B[globalRow * N + globalCol + i] : 0.0f;
+            }
+        }
+    };
+
+    load_tile(0, 0);
+    __syncthreads();
+
+    // ===== 主循环: 计算当前 tile + 预取下一个 tile =====
+    for (int t = 0; t < numTiles; t++) {
+        int curBuf = t % 2;
+        int nxtBuf = 1 - curBuf;
+
+        // 预取下一个 tile（如果还有）
+        if (t + 1 < numTiles) {
+            load_tile(nxtBuf, t + 1);
+        }
+
+        // 计算当前 tile
+        #pragma unroll
+        for (int k = 0; k < BK; k++) {
+            #pragma unroll
+            for (int m = 0; m < TM; m++)
+                regA[m] = As[curBuf][threadRow + m][k];
+            #pragma unroll
+            for (int n = 0; n < TN; n++)
+                regB[n] = Bs[curBuf][k][threadCol + n];
+            #pragma unroll
+            for (int m = 0; m < TM; m++)
+                #pragma unroll
+                for (int n = 0; n < TN; n++)
+                    regC[m][n] += regA[m] * regB[n];
+        }
+
+        __syncthreads();  // 确保预取完成后再进入下一轮
+    }
+
+    // ===== 写回 C (向量化) =====
+    for (int m = 0; m < TM; m++) {
+        int globalRow = by * BM + threadRow + m;
+        if (globalRow < M) {
+            for (int n = 0; n < TN; n += 4) {
+                int globalCol = bx * BN + threadCol + n;
+                if (globalCol + 3 < N) {
+                    float4 tmp = {regC[m][n], regC[m][n+1],
+                                  regC[m][n+2], regC[m][n+3]};
+                    reinterpret_cast<float4*>(
+                        &C[globalRow * N + globalCol])[0] = tmp;
+                } else {
+                    for (int i = 0; i < 4 && globalCol + i < N; i++)
+                        C[globalRow * N + globalCol + i] = regC[m][n + i];
+                }
+            }
+        }
+    }
+}
+```
+
+```
+V5 vs V4:
+  SMEM 用量: 8 KB × 2 = 16 KB (仍在 sm_86 的 100 KB 限制内)
+  加载-计算重叠: 隐藏 ~50-80% 的 HBM 延迟
+
+  进一步优化需要:
+    - SMEM bank conflict 消除（swizzle/padding）
+    - Warp-level tiling（把 BM×BN tile 再分配给 warp）
+    - 使用 cp.async 指令直接从 HBM 到 SMEM（绕过寄存器）
+```
+
+
+
+
+
+
+
+
+
+11

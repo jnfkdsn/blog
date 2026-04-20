@@ -52,7 +52,7 @@ Bank:   [B0] [B1] [B2] [B3] [B4] ... [B31]
 ```
 **bank 分配规则**：`address` 字节的数据在 `Bank = (address / 4) % 32`
 
-**Bank Conflict**: 每个 cycle，每个 bank 只能服务一个访问请求。如果**同一个 Warp 中的多个线程访问同一个 bank 的不同地址**，这些请求必须串行化
+**Bank Conflict**: 每个 cycle，每个 bank 只能服务一个访问请求。如果**同一个 Warp 中的多个线程访问同一个 bank 的不同地址**，这些请求必须串行化，发生在同一warp
 
 
 例如**`float shared[32][32]` 按列访问**：
