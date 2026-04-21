@@ -175,3 +175,147 @@ SM2: B[0:8, 256:384]   SM3: B[0:8, 384:512]
 当 N 很大时，处理 `(0,0)` 加载的 B 的第 0 列 tile 在处理 `(0,7)` 时很可能已经被 L2 Cache 驱逐了。而 `(1,0)` 又需要重新从 HBM 加载 B 的第 0-8 列——**B 的同一列被反复从 HBM 加载**，B 在 L2 cache命中率较低，但是A都能命中。
 
 ### 解决方案：按小组遍历
+将grid分成`GROUP_SIZE_M`行一组，组内先遍历列方向：
+```python
+GROUP_SUZE_M: tl.constexpr = 8
+
+#计算属于哪个组
+pid = tl.program_id(axis=0)
+num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+num_pid_in_group = GROUP_SIZE_M * num_pid_n
+group_id = pid // num_pid_in_group
+first_pid_m = group_id * GROUP_SIZE_M
+group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+
+#组内遍历顺序，将组内一维编号拆成二维坐标
+group_inner = pid % num_pid_in_group
+pid_m = first_pid_m + (group_inner % group_size_m)
+pid_n = group_inner // group_size_m
+```
+
+效果
+```
+对于GROUP_SIZE_M = 4
+group_inner=0 -> (m0, n0)
+group_inner=1 -> (m1, n0)
+group_inner=2 -> (m2, n0)
+group_inner=3 -> (m3, n0)
+group_inner=4 -> (m0, n1)
+group_inner=5 -> (m1, n1)
+也就是在同一个n下连续跑多行m
+```
+1. **1D Grid**：把二维 `(pid_m, pid_n)` 压成一维 `pid`，然后在 kernel 内部用 super-grouping 公式映射回 `(pid_m, pid_n)`。这样可以控制 program 的调度顺序。
+
+## FP16和tensor core
+
+### 浮点数类型
+
+| 格式 | 总位宽 | 符号 / 指数 / 尾数位 | 最大正规数 | 最小正正规数 | 十进制有效位数 | 核心定位 |
+|------|--------|-------------------|-----------|-----------|------------|------|
+| FP32 | 32 位 | 1/8/23 | ~3.4×10³⁸ | ~1.175×10⁻³⁸ | 6~9 位 | 通用高精度基准 |
+| FP16 | 16 位 | 1/5/10 | 65504 | ~6.1×10⁻⁵ | 3~4 位 | 边缘推理、图形渲染 |
+| BF16 | 16 位 | 1/8/7 | ~3.4×10³⁸ | ~1.175×10⁻³⁸ | 2~3 位 | 大模型训练 / 推理主力 |
+| FP8 E4M3 | 8 位 | 1/4/3 | 448 | 0.015625 | 1~2 位 | 权重 / 激活值计算 |
+| FP8 E5M2 | 8 位 | 1/5/2 | 57344 | ~6.1×10⁻⁵ | ~1 位 | 梯度计算 |
+
+BF16：动态范围大（和 FP32 接近），更不容易溢出，训练更稳
+FP16：有效精度位更多一点，但动态范围小，训练时更容易 overflow/underflow.
+
+### Triton使用FP16
+
+在 Triton 中使用 Tensor Core 只需要输入是 FP16 且用 `tl.dot`，编译器自动映射：
+
+```python
+a = torch.randn(M, K, device='cuda', dtype=torch.float16)
+b = torch.randn(K, N, device='cuda', dtype=torch.float16)
+
+# kernel 内部：tl.dot 自动使用 Tensor Core
+accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)  # 累加用 FP32
+# ...
+a_tile = tl.load(a_ptrs, ...)  # 加载的是 fp16
+b_tile = tl.load(b_ptrs, ...)  # 加载的是 fp16
+accumulator += tl.dot(a_tile, b_tile)  # fp16 × fp16 → fp32 累加
+c = accumulator.to(tl.float16)  # 最终结果转回 fp16
+```
+
+**混合精度策略**：输入 FP16，累加器 FP32，输出 FP16。
+- FP16 减少数据传输量
+- FP32 累加避免精度损失（FP16 的有效位数只有 10 bit，大矩阵的累加会丢失精度）
+
+### Tensor Core 对 BLCOK_SIZE的要求
+Tensor Core 的最小操作单元是 **16×16×16**：
+```
+Tensor Core 运算: D[16×16] = A[16×16] × B[16×16] + C[16×16]
+```
+
+所以 `BLOCK_SIZE_M`、`BLOCK_SIZE_N`、`BLOCK_SIZE_K` 都必须是 **16 的倍数**。常用配置：
+```python
+BLOCK_SIZE_M = 128  
+BLOCK_SIZE_N = 128  
+BLOCK_SIZE_K = 32  
+```
+BLOCK_SIZE不是16的整倍数会退回CUDA Core
+
+## FP8 GEMM
+
+- 精度更低 → 需要配合 **per-tensor / per-channel scaling**
+deepseek v3使用FP8训练
+```
+标准 FP16 GEMM:
+  C = A_fp16 @ B_fp16        (每元素 2 bytes)
+
+DeepSeek FP8 GEMM:
+  C = (A_fp8 × scale_A) @ (B_fp8 × scale_B)     (每元素 1 byte)
+
+  其中 scale 是 per-tensor 或 per-block 的缩放因子，
+  用于把原始 FP16/FP32 值映射到 FP8 的有限范围内。
+```
+
+### triton FP8
+```
+# FP8 × FP8 → FP32 累加（Tensor Core 原生支持）
+accumulator += tl.dot(a, b)
+# 应用缩放因子并输出
+c = accumulator * scale_a * scale_b
+c = c.to(tl.float16)
+```
+
+### FP8量化函数
+
+```python
+def quantize_to_fp8(x: torch.Tensor):
+    """将fp16/fp32tensor 量化为E4M3"""
+    # 计算 per-tensor 缩放因子
+    amax = x.abs().max().item()
+    # FP8 E4M3 的最大值是 240
+    scale = 240.0 / amax if amax > 0 else 1.0
+    # 量化
+    x_scaled = x.float() * scale
+    x_fp8 = x_scaled.to(torch.float8_e4m3fn)
+    return x_fp8, 1.0 / scale  # 返回量化后的 tensor 和反向缩放因子
+
+# 使用
+a_fp16 = torch.randn(M, K, device='cuda', dtype=torch.float16)
+b_fp16 = torch.randn(K, N, device='cuda', dtype=torch.float16)
+
+a_fp8, scale_a = quantize_to_fp8(a_fp16)
+b_fp8, scale_b = quantize_to_fp8(b_fp16)
+
+# FP8 GEMM
+c = matmul_fp8(a_fp8, b_fp8, scale_a, scale_b)
+```
+### per tensor和per block scaling
+```
+Per-tensor scaling（简单但精度较低）:
+  整个矩阵共享一个 scale → 异常值会挤压其他值的精度
+
+Per-block scaling（DeepSeek-V3 使用）:
+  每 128×128 的 block 有独立的 scale → 更好的精度
+  但增加了 scale 的存储和计算开销
+
+Per-channel scaling（AWQ 等量化方法）:
+  每个 output channel 一个 scale → 权重量化的常用方案
+```
+
+
