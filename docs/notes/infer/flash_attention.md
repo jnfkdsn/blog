@@ -80,16 +80,6 @@ $$m_{j+1} = \max(m_j, x_{j+1})$$
 $$d_{j+1} = d_j \cdot e^{m_j - m_{j+1}} + e^{x_{j+1} - m_{j+1}}$$
 当max被超过时，之前的指数和需要通过乘e^{m_j - m_{j+1}}来修正
 
-- 对于分块的softmax：
-
-设向量 $X$ 被分为两块
-$$X^{(1)} = [x_1, \dots, x_k], \quad X^{(2)} = [x_{k+1}, \dots, x_n]$$
-分别记两块的统计量为：
-$$m_1, d_1 \quad \text{和} \quad m_2, d_2$$
-则合并后的统计量为：
-$$m_{\text{new}} = \max(m_1, m_2)$$
-$$d_{\text{new}} = d_1 \cdot e^{m_1 - m_{\text{new}}} + d_2 \cdot e^{m_2 - m_{\text{new}}}$$
-
 ```
 FlashAttention：
 1. 把 K, V 切成 tile
@@ -114,6 +104,25 @@ $$O_i = \text{softmax}(Q_i K^T / \sqrt{d}) \cdot V$$
 
 $$m_i^{(0)} = -\infty, \quad \ell_i^{(0)} = 0, \quad O_i^{(0)} = 0$$
 
+先固定某一行 \(q\)。设它对所有 key 的打分是 \(s_t\)，对应 value 是 \(v_t\)。
+
+处理到第 \(j\) 个 tile 后，定义：
+
+$$
+m^{(j)}=\max_{t\le j\text{ tiles}} s_t
+$$
+
+$$
+\ell^{(j)}=\sum_{t\le j\text{ tiles}} e^{s_t-m^{(j)}}
+$$
+
+$$
+o^{(j)}=\frac{1}{\ell^{(j)}}\sum_{t\le j\text{ tiles}} e^{s_t-m^{(j)}}v_t
+$$
+
+这就是“当前已经处理部分”的 softmax 输出。
+
+
 **对每个 KV tile $j = 1, 2, \ldots, T_{kv}$**：
 
 $$
@@ -129,9 +138,37 @@ $$\tilde{P}_{ij} = \exp(S_{ij} - m_i^{(j)}) \quad \text{（当前 tile 的 exp�
 
 $$\ell_i^{(j)} = \ell_i^{(j-1)} \cdot \exp(m_i^{(j-1)} - m_i^{(j)}) + \text{rowsum}(\tilde{P}_{ij}) \quad \text{（全局 sum 更新）}$$
 
+
 $$O_i^{(j)} = O_i^{(j-1)} \cdot \frac{\ell_i^{(j-1)} \cdot \exp(m_i^{(j-1)} - m_i^{(j)})}{\ell_i^{(j)}} + \frac{\tilde{P}_{ij}}{\ell_i^{(j)}} \cdot V_j \quad \text{（O 修正）}$$
 
+其中 O 修正项可由“旧贡献 + 新贡献”直接得到：
+
+$$\sum_{\text{old}} e^{s-m_i^{(j)}}V = e^{m_i^{(j-1)}-m_i^{(j)}} \sum_{\text{old}} e^{s-m_i^{(j-1)}}V = e^{m_i^{(j-1)}-m_i^{(j)}}\,\ell_i^{(j-1)}\,O_i^{(j-1)}$$
+
+$$\sum_{\text{new}} e^{s-m_i^{(j)}}V = \tilde{P}_{ij}V_j$$
+
+$$O_i^{(j)} = \frac{\sum_{\text{old}} e^{s-m_i^{(j)}}V + \sum_{\text{new}} e^{s-m_i^{(j)}}V}{\ell_i^{(j)}}$$
+
+也就是说：旧块先按 $e^{m_i^{(j-1)}-m_i^{(j)}}$ 缩放到新坐标系，再和当前 tile 贡献合并，最后除以新的 $\ell_i^{(j)}$。
 **循环结束后**，$O_i^{(T_{kv})}$ 就是最终结果。
+
+定义未归一化的累积量
+$$
+U_i^{(j)}=\sum_{t\le j} e^{s_t-m_i^{(j)}}V_t
+$$
+并递推
+$$
+U_i^{(j)}=U_i^{(j-1)}e^{m_i^{(j-1)}-m_i^{(j)}}+\tilde P_{ij}V_j
+$$
+$$
+\ell_i^{(j)}=\ell_i^{(j-1)}e^{m_i^{(j-1)}-m_i^{(j)}}+\mathrm{rowsum}(\tilde P_{ij})
+$$
+最后再做
+$$
+O_i^{(T_{kv})}= \frac{U_i^{(T_{kv})}}{\ell_i^{(T_{kv})}}.
+$$
+
+可以减少计算量
 
 ### 内存分析
 
@@ -145,5 +182,8 @@ FlashAttention:
   HBM 读写: O(N² d² / SRAM_size) — Q/K/V 各被读 O(N d / SRAM_size) 次
 
   当 SRAM 足够大时，每个 Q/K/V 只被读一次或少数几次
-  S 矩阵不需要完整写入 HBM
+  假设SRAM大小为 M
+  片上需要保存的内容有：Q 块 (Br,d) K 块 (Bc,d) V 块 (Bc,d) O块 (Br,d)
+  最优分块大小为 M // 4d 
+  S块可以边算边用
 ```
