@@ -152,6 +152,31 @@ $$O_i^{(j)} = \frac{\sum_{\text{old}} e^{s-m_i^{(j)}}V + \sum_{\text{new}} e^{s-
 也就是说：旧块先按 $e^{m_i^{(j-1)}-m_i^{(j)}}$ 缩放到新坐标系，再和当前 tile 贡献合并，最后除以新的 $\ell_i^{(j)}$。
 **循环结束后**，$O_i^{(T_{kv})}$ 就是最终结果。
 
+
+### 内存分析
+
+```
+标准 Attention:
+  额外显存: O(N²) — 存 S 和 P
+  HBM 读写: O(N² d) — 多次读写 S, P
+
+FlashAttention:
+  额外显存: O(N) — 只存 m 和 ℓ（每行一个 max 和 sum）
+  HBM 读写: O(N² d² / SRAM_size) — Q/K/V 各被读 O(N d / SRAM_size) 次
+
+时间复杂度： O(N^2 d)
+
+空间复杂度：
+sram需要存储：Q,K,V,O,score，max和sum向量
+HBM只需要存储输出O,O(Nd)
+```
+
+
+## flash attention v2
+
+v2主要在v1的基础上做了三个改进
+### 1.减少非计算FLOPs
+
 定义未归一化的累积量
 $$
 U_i^{(j)}=\sum_{t\le j} e^{s_t-m_i^{(j)}}V_t
@@ -169,21 +194,421 @@ O_i^{(T_{kv})}= \frac{U_i^{(T_{kv})}}{\ell_i^{(T_{kv})}}.
 $$
 
 可以减少计算量
+```python
+# V1: 每步都做归一化修正
+O_i = O_i * (l_old * alpha / l_new) + P_ij @ V_j / l_new
+```
+```python
+# V2: 循环内不归一化，只做乘加
+O_i = O_i * alpha[:, None] + P_ij @ V_j  # 没有除以 l_new
+# 循环结束后
+O_i = O_i / l_i[:, None]                 # 最后统一归一化
+```
 
-### 内存分析
+### 2.交换循环顺序
+v1的循环结构是：**外层遍历Q tile，内层遍历 KV tile**
+
+v2分析了两种循环在不同场景下的优劣：
+- 外层Q,内层KV:每个 program 独立处理一个 Q tile，不需要跨 program 通信。但 K/V 被重复从 HBM 读取
+- **外层 KV，内层 Q**：每个 KV tile 只读一次，Q tile 在循环中流过。但 O 的更新需要跨 program 通信（写冲突）。
+
+前向过程适合外层Q，反向过程适合内层Q：
+前向计算时，每个q_i对应一整行attention，一个 Q 块在扫描 K/V 的过程中，只需要维护自己的m，l，o，这些状态是按Q行独立的，因此如果外层固定 Q 块，内层扫描 K/V 块，就可以把这个 Q 块的中间状态一直留在 SRAM/寄存器里，直到它的输出完成。
+反向过程已知dO,要求dQ,dK,dV,
+```
+前向：
+O = PV
+P = softmax(S)
+S = QK^T/sqrt(d)
+
+反向：
+dV = P^TdO
+dP = dO V^T
+逐元素写
+dV_j = sum_i p_i,j dO_i
+dP_i,j = dO_i · v_j
+对每一行
+p_i = softmax(s_i)
+softmax的反向为：
+dS_i,j = p_i,j * (dP_i,j - sum_t p_i,t dP_i,t)
+
+sum_t p_i,t dP_i,t
+= sum_t p_i,t (dO_i · v_t)
+= dO_i · sum_t p_i,t v_t
+= dO_i · O_i
+
+令D_i = dO_i · O_i
+则dS_i,j = p_i,j * (dO_i · v_j - D_i)
+
+有S = QK^T / sqrt(d)
+dQ_i = sum_j dS_i,j k_j / sqrt(d)
+dK_j = sum_i dS_i,j q_i / sqrt(d)
+dV_j = sum_i p_i,j dO_i
 
 ```
-标准 Attention:
-  额外显存: O(N²) — 存 S 和 P
-  HBM 读写: O(N² d) — 多次读写 S, P
+dK和dV都是固定一个 K/V 位置 j，对所有 Q 行 i 求和，所以适合内层Q
 
-FlashAttention:
-  额外显存: O(N) — 只存 m 和 ℓ（每行一个 max 和 sum）
-  HBM 读写: O(N² d² / SRAM_size) — Q/K/V 各被读 O(N d / SRAM_size) 次
+### 3.warp分工优化
+V1 中每个 warp 都参与所有计算（GEMM 和 softmax）。V2 让不同 warp 做不同的工作：
 
-  当 SRAM 足够大时，每个 Q/K/V 只被读一次或少数几次
-  假设SRAM大小为 M
-  片上需要保存的内容有：Q 块 (Br,d) K 块 (Bc,d) V 块 (Bc,d) O块 (Br,d)
-  最优分块大小为 M // 4d 
-  S块可以边算边用
 ```
+V1: 所有 4 个 warp 一起做 QK^T， softmax，PV
+    → warp 间需要大量同步
+
+V2: 将 BLOCK_M 分配给不同 warp，每个 warp 独立处理几行
+    → 减少 warp 间的同步和通信
+
+    Warp 0: 处理 Q 的第 0-15 行
+    Warp 1: 处理 Q 的第 16-31 行
+    Warp 2: 处理 Q 的第 32-47 行
+    Warp 3: 处理 Q 的第 48-63 行
+```
+
+这在 Triton 中通过调整 `BLOCK_M` 和 `num_warps` 的比例来实现。
+
+
+
+## 附录：反向传播公式推导
+设最终 loss 为 $L$，上游梯度为：
+
+$$
+G = \frac{\partial L}{\partial O} = dO
+$$
+
+其中：
+
+$$
+Q,K,V,O \in \mathbb{R}^{N \times d}, \quad S,P \in \mathbb{R}^{N \times N}
+$$
+
+前向过程为：
+
+$$
+S = \frac{QK^T}{\sqrt d}
+$$
+
+$$
+P = \mathrm{softmax}(S)
+$$
+
+$$
+O = PV
+$$
+
+反向需要依次求：
+
+$$
+dV,\ dP,\ dS,\ dQ,\ dK
+$$
+
+
+
+### 1. $O = PV$ 的反向
+
+对 $O = PV$ 求微分：
+
+$$
+dO = dP \cdot V + P \cdot dV
+$$
+
+根据标量 loss 的微分定义：
+
+$$
+dL = \mathrm{tr}(G^T dO)
+$$
+
+代入 $dO$：
+
+$$
+dL
+= \mathrm{tr}(G^T dP V) + \mathrm{tr}(G^T P dV)
+$$
+
+先看第一项：
+
+$$
+\mathrm{tr}(G^T dP V)
+= \mathrm{tr}(V G^T dP)
+= \mathrm{tr}((G V^T)^T dP)
+$$
+
+所以：
+
+$$
+dP = G V^T
+$$
+
+再看第二项：
+
+$$
+\mathrm{tr}(G^T P dV)
+= \mathrm{tr}((P^T G)^T dV)
+$$
+
+所以：
+
+$$
+dV = P^T G
+$$
+
+也就是：
+
+$$
+dP = dO \cdot V^T
+$$
+
+$$
+dV = P^T \cdot dO
+$$
+
+逐元素写为：
+
+$$
+dP_{ij} = dO_i \cdot v_j
+$$
+
+$$
+dV_j = \sum_i P_{ij} dO_i
+$$
+
+其中 $dO_i$ 和 $v_j$ 都是长度为 $d$ 的向量。
+
+### 2. $P = \mathrm{softmax}(S)$ 的反向
+
+softmax 是逐行计算的，所以对第 $i$ 行单独推导。
+
+设：
+
+$$
+p_i = \mathrm{softmax}(s_i)
+$$
+
+其中：
+
+$$
+p_{ij} = \frac{e^{s_{ij}}}{\sum_t e^{s_{it}}}
+$$
+
+softmax 的 Jacobian 为：
+
+$$
+\frac{\partial p_{ij}}{\partial s_{ik}}
+= p_{ij}(\delta_{jk} - p_{ik})
+$$
+
+其中 $\delta_{jk}$ 是 Kronecker delta。当 $j=k$ 时为 1，否则为 0。
+
+对第 $i$ 行，有：
+
+$$
+dS_{ik}
+= \sum_j dP_{ij} \frac{\partial p_{ij}}{\partial s_{ik}}
+$$
+
+代入 softmax Jacobian：
+
+$$
+dS_{ik}
+= \sum_j dP_{ij} p_{ij}(\delta_{jk} - p_{ik})
+$$
+
+拆开两项：
+
+$$
+dS_{ik}
+= dP_{ik}p_{ik} - p_{ik}\sum_j dP_{ij}p_{ij}
+$$
+
+提取 $p_{ik}$：
+
+$$
+dS_{ik}
+= p_{ik}\left(dP_{ik} - \sum_j p_{ij}dP_{ij}\right)
+$$
+
+换回常用下标 $j$：
+
+$$
+dS_{ij}
+= P_{ij}\left(dP_{ij} - \sum_t P_{it}dP_{it}\right)
+$$
+
+写成矩阵形式：
+
+$$
+dS = P \odot \left(dP - D\right)
+$$
+
+其中 $\odot$ 表示逐元素乘法，$D$ 是把每一行的内积广播到整行的矩阵：
+
+$$
+D_i = \sum_t P_{it}dP_{it}
+$$
+
+由于：
+
+$$
+dP_{it} = dO_i \cdot v_t
+$$
+
+所以：
+
+$$
+D_i
+= \sum_t P_{it}(dO_i \cdot v_t)
+$$
+
+把 $dO_i$ 提出来：
+
+$$
+D_i
+= dO_i \cdot \sum_t P_{it}v_t
+$$
+
+而前向输出：
+
+$$
+O_i = \sum_t P_{it}v_t
+$$
+
+因此：
+
+$$
+D_i = dO_i \cdot O_i
+$$
+
+所以 softmax 反向最终可以写成：
+
+$$
+dS_{ij}
+= P_{ij}(dO_i \cdot v_j - dO_i \cdot O_i)
+$$
+
+也就是：
+
+$$
+dS = P \odot (dO V^T - D)
+$$
+
+其中：
+
+$$
+D = \mathrm{rowsum}(dO \odot O)
+$$
+
+并且 $D$ 在列方向广播。
+
+### 3. $S = QK^T / \sqrt d$ 的反向
+
+对：
+
+$$
+S = \frac{QK^T}{\sqrt d}
+$$
+
+求微分：
+
+$$
+dS = \frac{dQK^T + QdK^T}{\sqrt d}
+$$
+
+根据：
+
+$$
+dL = \mathrm{tr}(dS_{\mathrm{grad}}^T dS)
+$$
+
+这里把上一步得到的梯度记为 $dS_{\mathrm{grad}}$，为了避免和微分符号混淆。
+
+代入：
+
+$$
+dL
+= \mathrm{tr}\left(dS_{\mathrm{grad}}^T \frac{dQK^T + QdK^T}{\sqrt d}\right)
+$$
+
+拆成两项：
+
+$$
+dL
+= \frac{1}{\sqrt d}\mathrm{tr}(dS_{\mathrm{grad}}^T dQK^T)
++ \frac{1}{\sqrt d}\mathrm{tr}(dS_{\mathrm{grad}}^T QdK^T)
+$$
+
+第一项：
+
+$$
+\mathrm{tr}(dS_{\mathrm{grad}}^T dQK^T)
+= \mathrm{tr}(K^T dS_{\mathrm{grad}}^T dQ)
+= \mathrm{tr}((dS_{\mathrm{grad}}K)^T dQ)
+$$
+
+所以：
+
+$$
+dQ = \frac{dS_{\mathrm{grad}}K}{\sqrt d}
+$$
+
+第二项：
+
+$$
+\mathrm{tr}(dS_{\mathrm{grad}}^T QdK^T)
+= \mathrm{tr}(dK^T dS_{\mathrm{grad}}^T Q)
+= \mathrm{tr}((dS_{\mathrm{grad}}^T Q)^T dK)
+$$
+
+所以：
+
+$$
+dK = \frac{dS_{\mathrm{grad}}^T Q}{\sqrt d}
+$$
+
+最终反向公式为：
+
+$$
+dV = P^T dO
+$$
+
+$$
+dP = dO V^T
+$$
+
+$$
+D_i = dO_i \cdot O_i
+$$
+
+$$
+dS_{ij} = P_{ij}(dP_{ij} - D_i)
+$$
+
+$$
+dQ = \frac{dS K}{\sqrt d}
+$$
+
+$$
+dK = \frac{dS^T Q}{\sqrt d}
+$$
+
+逐元素形式为：
+
+$$
+dQ_i = \sum_j dS_{ij}k_j / \sqrt d
+$$
+
+$$
+dK_j = \sum_i dS_{ij}q_i / \sqrt d
+$$
+
+$$
+dV_j = \sum_i P_{ij}dO_i
+$$
+
+这三个式子正好解释了循环顺序：
+
+- $dQ_i$ 固定 query 行 $i$，对所有 key/value 位置 $j$ 求和。
+- $dK_j$ 固定 key 行 $j$，对所有 query 位置 $i$ 求和。
+- $dV_j$ 固定 value 行 $j$，对所有 query 位置 $i$ 求和。
+
+所以反向中如果要高效累加 $dK$ 和 $dV$，更自然的方式是固定一个 KV tile，把 Q tile 放在内层扫过来累加。
+
+
