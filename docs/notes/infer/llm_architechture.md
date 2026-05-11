@@ -62,3 +62,106 @@ def apply_rotary_pos_emb(q, k, cos, sin):
     k = apply_rope(k, cos, sin)
     return q, k
 ```
+
+## kv cache
+每个attettion层都有自己的kvcache，为什么第 2 层的输入不是会受新 token 影响吗，所以旧 token 的第 2 层表示会不会变？
+设某一层的输入是
+```math
+X = [x_1, x_2, \dots, x_T]^\top \in \mathbb{R}^{T \times d}
+```
+先做线性投影得到
+```math
+Q = XW_Q,\quad K = XW_K,\quad V = XW_V
+```
+其中第 `i` 个位置对应
+```math
+q_i = x_i W_Q,\quad k_i = x_i W_K,\quad v_i = x_i W_V
+```
+---
+
+**没有 mask 的 attention**
+
+第 `i` 个位置对第 `j` 个位置的打分是：
+
+```math
+s_{ij} = \frac{q_i k_j^\top}{\sqrt{d_k}}
+```
+
+然后对第 `i` 行做 softmax：
+
+```math
+\alpha_{ij} = \frac{\exp(s_{ij})}{\sum_{m=1}^T \exp(s_{im})}
+```
+
+最后输出：
+
+```math
+o_i = \sum_{j=1}^T \alpha_{ij} v_j
+```
+
+这时 `i` 可以看到所有 `j=1...T`，包括未来位置。
+
+---
+
+**加入 causal mask**
+
+causal mask 定义成一个矩阵 `M`：
+
+```math
+M_{ij} =
+\begin{cases}
+0, & j \le i \\
+-\infty, & j > i
+\end{cases}
+```
+
+也就是：
+
+- 当前位置 `i` 可以看自己和左边
+- 不能看右边未来 token
+
+于是 attention 分数变成：
+
+```math
+\tilde{s}_{ij} = \frac{q_i k_j^\top}{\sqrt{d_k}} + M_{ij}
+```
+
+再做 softmax：
+
+```math
+\alpha_{ij} = \frac{\exp(\tilde{s}_{ij})}{\sum_{m=1}^T \exp(\tilde{s}_{im})}
+```
+
+因为当 `j > i` 时，`M_{ij} = -\infty`，所以：
+
+```math
+\exp(\tilde{s}_{ij}) = 0
+```
+
+于是：
+
+```math
+\alpha_{ij} = 0,\quad \forall j > i
+```
+
+所以输出就变成：
+
+```math
+o_i = \sum_{j=1}^i \alpha_{ij} v_j
+```
+
+**第 `i` 个位置的输出只依赖 `1...i`，不依赖 `i+1...T`。**
+
+
+- 新 token 不会影响旧位置第 1 层的输出
+- 第 1 层输出不变，则第 2 层输入不变
+- 第 2 层也有同样的 causal mask，所以第 2 层旧位置输出也不变
+- 层层递推，所有层都成立
+
+所以旧 token 在所有层的 `K/V` 都可以缓存。
+整体写成矩阵就是：
+
+```math
+\text{Attention}(Q,K,V) =
+\text{Softmax}\left(\frac{QK^\top}{\sqrt{d_k}} + M\right)V
+```
