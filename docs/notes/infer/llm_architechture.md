@@ -80,26 +80,7 @@ q_i = x_i W_Q,\quad k_i = x_i W_K,\quad v_i = x_i W_V
 ---
 
 **没有 mask 的 attention**
-
-第 `i` 个位置对第 `j` 个位置的打分是：
-
-```math
-s_{ij} = \frac{q_i k_j^\top}{\sqrt{d_k}}
-```
-
-然后对第 `i` 行做 softmax：
-
-```math
-\alpha_{ij} = \frac{\exp(s_{ij})}{\sum_{m=1}^T \exp(s_{im})}
-```
-
-最后输出：
-
-```math
-o_i = \sum_{j=1}^T \alpha_{ij} v_j
-```
-
-这时 `i` 可以看到所有 `j=1...T`，包括未来位置。
+ `i` 可以看到所有 `j=1...T`，包括未来位置。
 
 ---
 
