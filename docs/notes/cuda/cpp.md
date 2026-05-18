@@ -1,5 +1,9 @@
 ---
 order: 1
+title: C++ 前置知识
+updated: 2026-05-18
+tags: [cpp, cuda, raii, template]
+status: draft
 ---
 
 # C++ 前置知识
@@ -11,14 +15,14 @@ CPU(HOST),CUDA(DEVICE)有各自独立的内存空间
 1. 在 GPU 上分配内存（`cudaMalloc` 返回一个指向 GPU 内存的指针）
 2. 把数据从 CPU 拷贝到 GPU（通过指针指定源和目标地址）
 3. 把 GPU 指针作为参数传给 kernel 函数
-CUDA通过指针通信(model.to(device)即对每个参数cudaMemcpy(HostToDevice))
+CUDA Runtime API 主要通过指针表达内存位置和数据搬运。PyTorch 中的 `model.to(device)` 可以理解成把参数和 buffer 迁移到 GPU，但底层还涉及 allocator、stream、异步 copy 等机制，不完全等价于用户手写逐个 `cudaMemcpy`。
 
 ### 动态内存分配
 栈上的数组大小必须在编译期确定，当需要运行时确定大小的数组时需要动态分配(堆分配)
 ```c++
 int n; std::cin >> n; 
 float* data = new float[n]; 
-delete[] data 
+delete[] data;
 ```
 
 ### void* 类型转换
@@ -101,6 +105,26 @@ auto moved = std::move(host_data);
 ### std::shared_ptr
 允许多个指针共享一个对象，内部维护引用计数。
 
+### 用 RAII 管理 CUDA 资源
+
+`std::unique_ptr` 默认只会调用 `delete`，不能直接释放 `cudaMalloc` 得到的指针。CUDA 资源也可以用 RAII 思路管理，但需要自定义 deleter：
+
+```cpp
+struct CudaDeleter {
+    void operator()(float* p) const {
+        if (p) cudaFree(p);
+    }
+};
+
+std::unique_ptr<float, CudaDeleter> make_device_buffer(size_t n) {
+    float* ptr = nullptr;
+    cudaMalloc(&ptr, n * sizeof(float));
+    return std::unique_ptr<float, CudaDeleter>(ptr);
+}
+```
+
+真实项目里通常还会把 `cudaMalloc` 的返回值接入 `CUDA_CHECK`，避免分配失败后继续使用空指针。
+
 ## 0.5 模板
 
 CUDA kernel经常需要支持多种数据类型和多种配置，模板可以用一份代码，编译器自动生成特化版本
@@ -181,10 +205,35 @@ namespace B{
 头文件.h/.hpp包含声明，源文件.cpp/.cu包含定义
 模板函数和constexpr函数的实现在头文件，编译器在编译 main.cpp 时就要看到函数实现，不能等到链接
 ### 前向声明
-？
+前向声明是在头文件里先告诉编译器“有这个类型/函数”，但暂时不给完整定义。它可以减少头文件互相 include，降低编译依赖。
+
+```cpp
+// tensor.hpp
+class Tensor;
+
+void launch_kernel(const Tensor& x);
+```
+
+只有在需要知道对象大小或访问成员时，才必须 include 完整定义：
+
+```cpp
+// tensor.cpp
+#include "tensor.hpp"
+#include "tensor_impl.hpp"
+```
+
+如果只是使用 `Tensor*`、`Tensor&` 或声明函数参数，前向声明通常够用；如果要按值保存 `Tensor` 或访问 `x.shape()`，就需要完整定义。
 
 ## 0.8 lambda函数
 - Lambda 语法：`[捕获](参数) { 函数体 }`
 - `[=]` 按值捕获，`[&]` 按引用捕获 所有外部参数
 
 ## 0.9 cmake和pybind11
+
+CUDA 算子接到 Python 时通常会出现三层代码：
+
+- `.cu`：写 kernel 和 C++ launcher。
+- `.cpp`：用 pybind11 或 Torch extension 暴露 Python 接口。
+- `CMakeLists.txt` / `setup.py`：负责把 C++/CUDA 编译成 Python 能 import 的 `.so`。
+
+这部分和 [CMake 构建实践](/notes/cuda/cmake) 连起来看。

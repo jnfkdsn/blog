@@ -1,7 +1,14 @@
 ---
 order: 4
+title: Roofline 分析
+updated: 2026-05-18
+tags: [cuda, performance, roofline]
+status: draft
 ---
 # Roofline 分析
+
+相关路线：[GPU 编程与算子优化知识地图](/notes/gpu-programming)  
+相关实践：[Softmax 算子实现与优化](/posts/softmax) / [CUDA 矩阵乘法](/posts/GEMM)
 
 ### Roofline Model
 Roofline Model 是判断一个 kernel **瓶颈在计算还是在访存**的核心工具。它用一张图回答一个问题：**我的 kernel 跑到了硬件极限的百分之多少？瓶颈是什么？**
@@ -70,8 +77,8 @@ $$\text{Ridge Point} = \frac{\text{Peak Compute}}{\text{Peak BW}}$$
 ```
 RTX 3090:
   FP32 Peak Compute:       35.6 TFLOPS
-  HBM Bandwidth:           936 GB/s     
-  L2 Cache:                32 MB
+  GDDR6X Bandwidth:        936 GB/s
+  L2 Cache:                6 MB
 
 Ridge Point = 35.6 TFLOPS / 936 GB/s ≈ 38 FLOPs/Byte
 ```
@@ -99,6 +106,8 @@ Ridge Point = 35.6 TFLOPS / 936 GB/s ≈ 38 FLOPs/Byte
 算术强度:
   AI = 2.10 × 10^7 / 3.2 × 10^7 ≈ 0.66 FLOPs/Byte
 ```
+
+这里把 `exp` 近似成 1 FLOP 只是为了做粗略 Roofline 定位。`exp`、`sin`、`cos` 这类特殊函数通常由 SFU 执行，真实延迟和吞吐不一定能被 FLOPs 完整表达。遇到这类 kernel，Roofline 只能先判断大方向，最终还要结合 Nsight Compute 的指令统计和 stall 原因。
 
 **Step 3：画 Roofline 并定位**
 

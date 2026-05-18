@@ -1,5 +1,18 @@
+---
+order: 5
+title: Transpose 访存优化
+updated: 2026-05-18
+tags: [cuda, transpose, coalescing, shared-memory]
+status: draft
+---
+
+# Transpose 访存优化
+
+相关路线：[GPU 编程与算子优化知识地图](/notes/gpu-programming) / [CUDA 学习笔记](/notes/cuda/)  
+相关基础：[CUDA 基础语法](/notes/cuda/cuda_basic_syntax)
+
 ### 1.Global Memory 访问优化：Coalescing
-GPU全局内存按照128字节（32bytes * 4 扇区）为单位进行事务，当一个wrap的32个线程同时访问连续的内存地址时，把32个请求合并
+GPU全局内存按照128字节（32bytes * 4 扇区）为单位进行事务，当一个warp的32个线程同时访问连续的内存地址时，把32个请求合并
 
 #### 用shared memory解决非合并访问
 ```cpp
@@ -22,7 +35,7 @@ __global__ void transpose_optimized(const float* input, float* output,
 }
 ```
 1. shared memory是片上SRAM，不存在coalescing，只需要关注bank conflict
-2. 同一wrap内，threadidx.x连续变化，对于二维block，CUDA线性化公式是：linear_tid=threadIdx.y × blockDim.x + threadIdx.x
+2. 同一warp内，threadidx.x连续变化，对于二维block，CUDA线性化公式是：linear_tid=threadIdx.y × blockDim.x + threadIdx.x
 对于dim3 block(32,32),即blockDim.x = 32
 ```
 linear_tid:  threadIdx.y  threadIdx.x
@@ -37,7 +50,7 @@ linear_tid:  threadIdx.y  threadIdx.x
    63            1           31      ← Warp 1（这 32 个线程 y=1, x=0~31）
 ```
 每个 warp 刚好是一整行：threadIdx.y 相同，threadIdx.x 从 0 到 31。
-如果blockDim.x < 32,每个wrap会跨越两行，coalescing效果变差
+如果blockDim.x < 32,每个warp会跨越两行，coalescing效果变差
 
 ### bank conflict
 #### Shared Memory 的物理结构
@@ -74,4 +87,3 @@ __shared__ float data[32][33];  // 多加 1 列
 // threadIdx.x=1 → 地址 33*4=132  → Bank 1  (132/4 % 32 = 1)
 // threadIdx.x=2 → 地址 66*4=264  → Bank 2  (264/4 % 32 = 2)
 ```
-

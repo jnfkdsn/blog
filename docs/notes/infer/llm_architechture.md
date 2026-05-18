@@ -1,6 +1,14 @@
 ---
 order: 1
+title: LLM 架构基础
+updated: 2026-05-18
+tags: [llm, inference, transformer]
+status: draft
 ---
+
+# LLM 架构基础
+
+相关路线：[推理系统笔记](/notes/infer/) / [LLM 推理系统知识地图](/notes/llm-inference)
 
 ## RMSNorm
 $$
@@ -66,17 +74,22 @@ def apply_rotary_pos_emb(q, k, cos, sin):
 ## kv cache
 每个attettion层都有自己的kvcache，为什么第 2 层的输入不是会受新 token 影响吗，所以旧 token 的第 2 层表示会不会变？
 设某一层的输入是
-```math
+$$
 X = [x_1, x_2, \dots, x_T]^\top \in \mathbb{R}^{T \times d}
-```
+$$
+
 先做线性投影得到
-```math
+
+$$
 Q = XW_Q,\quad K = XW_K,\quad V = XW_V
-```
+$$
+
 其中第 `i` 个位置对应
-```math
+
+$$
 q_i = x_i W_Q,\quad k_i = x_i W_K,\quad v_i = x_i W_V
-```
+$$
+
 ---
 
 **没有 mask 的 attention**
@@ -88,13 +101,13 @@ q_i = x_i W_Q,\quad k_i = x_i W_K,\quad v_i = x_i W_V
 
 causal mask 定义成一个矩阵 `M`：
 
-```math
+$$
 M_{ij} =
 \begin{cases}
 0, & j \le i \\
 -\infty, & j > i
 \end{cases}
-```
+$$
 
 也就是：
 
@@ -103,33 +116,33 @@ M_{ij} =
 
 于是 attention 分数变成：
 
-```math
+$$
 \tilde{s}_{ij} = \frac{q_i k_j^\top}{\sqrt{d_k}} + M_{ij}
-```
+$$
 
 再做 softmax：
 
-```math
+$$
 \alpha_{ij} = \frac{\exp(\tilde{s}_{ij})}{\sum_{m=1}^T \exp(\tilde{s}_{im})}
-```
+$$
 
 因为当 `j > i` 时，`M_{ij} = -\infty`，所以：
 
-```math
+$$
 \exp(\tilde{s}_{ij}) = 0
-```
+$$
 
 于是：
 
-```math
+$$
 \alpha_{ij} = 0,\quad \forall j > i
-```
+$$
 
 所以输出就变成：
 
-```math
+$$
 o_i = \sum_{j=1}^i \alpha_{ij} v_j
-```
+$$
 
 **第 `i` 个位置的输出只依赖 `1...i`，不依赖 `i+1...T`。**
 
@@ -142,7 +155,7 @@ o_i = \sum_{j=1}^i \alpha_{ij} v_j
 所以旧 token 在所有层的 `K/V` 都可以缓存。
 整体写成矩阵就是：
 
-```math
+$$
 \text{Attention}(Q,K,V) =
 \text{Softmax}\left(\frac{QK^\top}{\sqrt{d_k}} + M\right)V
-```
+$$

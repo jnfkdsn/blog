@@ -1,8 +1,15 @@
 ---
 order: 4
+title: Flash Attention 原理与实现
+updated: 2026-05-18
+tags: [attention, softmax, cuda, inference]
+status: draft
 ---
 
 # flash_attention 原理与实现
+
+相关路线：[LLM 推理系统知识地图](/notes/llm-inference) / [GPU 编程与算子优化知识地图](/notes/gpu-programming)  
+相关基础：[Softmax 算子实现与优化](/posts/softmax) / [Roofline 分析](/notes/cuda/roofline)
 
 ## attention的缺陷
 传统实现如下
@@ -30,7 +37,7 @@ N = 131072: S 大小 = 131072² × 2 bytes = 32 GB
 ```
 一个 32-head 的模型，一层 Attention 的 S 矩阵需要 `heads × N² × 2` 字节。
 
-### 问题二：4次HBM读写
+### 问题二：多次显存读写
 
 S写入
 P读写
@@ -43,8 +50,8 @@ Softmax 需要看到**整行**数据才能计算。标准实现中，必须先�
 ```
 RTX 3090:
   FP32 Peak Compute:       35.6 TFLOPS
-  HBM Bandwidth:           936 GB/s     
-  L2 Cache:                32 MB
+  GDDR6X Bandwidth:        936 GB/s
+  L2 Cache:                6 MB
 
 Ridge Point = 35.6 TFLOPS / 936 GB/s ≈ 38 FLOPs/Byte
 ```
@@ -610,5 +617,3 @@ $$
 - $dV_j$ 固定 value 行 $j$，对所有 query 位置 $i$ 求和。
 
 所以反向中如果要高效累加 $dK$ 和 $dV$，更自然的方式是固定一个 KV tile，把 Q tile 放在内层扫过来累加。
-
-

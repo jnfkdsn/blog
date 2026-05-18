@@ -1,7 +1,14 @@
 ---
 order: 5
+title: nano-vLLM 源码阅读
+updated: 2026-05-18
+tags: [llm, inference-engine, vllm]
+status: draft
 ---
 # nano-vllm
+
+相关路线：[LLM 推理系统知识地图](/notes/llm-inference) / [项目实战](/projects/)  
+相关基础：[LLM 架构基础](/notes/infer/llm_architechture) / [量化笔记](/notes/infer/quantization)
 
 ## 1. 整体目录结构
 ```

@@ -1,6 +1,15 @@
 ---
 order: 2
+title: Reduce 优化实践
+updated: 2026-05-18
+tags: [cuda, reduce, warp-shuffle]
+status: draft
 ---
+
+# Reduce 优化实践
+
+相关路线：[GPU 编程与算子优化知识地图](/notes/gpu-programming) / [CUDA 学习笔记](/notes/cuda/)  
+相关实践：[Softmax 算子实现与优化](/posts/softmax)
 
 ## 问题定义
 在softmax中实现了树形归约和warp shuffle，本节目标是系统化这些知识，处理各种reduce算子

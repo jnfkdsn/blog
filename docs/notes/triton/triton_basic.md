@@ -1,6 +1,15 @@
 ---
 order: 2
+title: Triton 基础
+updated: 2026-05-18
+tags: [triton, gpu, kernel]
+status: draft
 ---
+
+# Triton 基础
+
+相关路线：[Triton 学习笔记](/notes/triton/) / [GPU 编程与算子优化知识地图](/notes/gpu-programming)
+
 ## 1. triton介绍
 
 Triton 是 OpenAI 开发的GPU 编程语言和编译器，旨在简化并优化在GPU上执行的复杂操作的开发。它的定位介于 CUDA 和 PyTorch 之间：
@@ -279,4 +288,3 @@ Triton 的 JIT 编译在首次调用时需要几秒到几十秒（尤其是 auto
 - Triton 编译器的 shared memory 布局选择可能不是最优的
 - 无法使用 PTX 内联汇编做微指令级优化
 - 无法精确控制 warp scheduling
-

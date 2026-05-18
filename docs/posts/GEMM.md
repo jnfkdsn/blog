@@ -1,8 +1,15 @@
 ---
 order: 3
+title: CUDA 矩阵乘法
+updated: 2026-05-18
+tags: [cuda, gemm, tiling, tensor-core]
+status: draft
 ---
 
 # CUDA 矩阵乘法
+
+相关路线：[GPU 编程与算子优化知识地图](/notes/gpu-programming)  
+相关基础：[Roofline 分析](/notes/cuda/roofline) / [Triton GEMM 优化](/posts/triton_gemm)
 
 ## Roofline分析
 
@@ -30,9 +37,9 @@ $$\text{AI} = \frac{2n^3}{3n^2 \times 4} = \frac{n}{6} \quad \text{(float32)}$$
   4096   137.4G         192 MB           682.7    Compute-bound
 RTX 3090:
   FP32 Peak Compute:       35.6 TFLOPS
-  HBM Bandwidth:           936 GB/s   
+  GDDR6X Bandwidth:        936 GB/s
   SMEM:					   17.7 TB/s  
-  L2 Cache:                32 MB
+  L2 Cache:                6 MB
 Ridge Point = 35.6 TFLOPS / 936 GB/s ≈ 38 FLOPs/Byte
 对于较大的n，是严重compute-bound
 ```

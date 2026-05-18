@@ -7,26 +7,26 @@ hero:
   tagline: GPU 编程 · Kernel 优化 · CMake 构建 · 高性能计算
   actions:
     - theme: brand
-      text: CUDA 笔记 →
-      link: /notes/cuda/
+      text: 知识库入口 →
+      link: /notes/
     - theme: alt
-      text: 实践记录
-      link: /posts/
+      text: GPU 编程地图
+      link: /notes/gpu-programming
     - theme: alt
       text: GitHub
       link: https://github.com/jnfkdsn
 
 features:
   - icon: 🔥
-    title: CUDA Kernel 开发
-    details: 从 vector_add 到 Softmax，逐步深入 GPU 并行编程与性能优化
+    title: GPU 编程与算子优化
+    details: 串联 C++、CUDA、Triton、Roofline、Nsight Compute 和典型算子复盘
   - icon: 🔧
-    title: C++/CUDA 工程化
-    details: CMake 构建系统、pybind11 打包 Python 扩展、项目结构最佳实践
+    title: 算子优化实践
+    details: 从 Reduce、Softmax、GEMM 到 Flash Attention，记录实现、瓶颈和优化复盘
   - icon: 📊
-    title: 性能分析与调优
-    details: Nsight Profiling、内存带宽分析、Roofline Model 实战
+    title: LLM 推理系统
+    details: 连接模型结构、KV cache、量化、推理引擎和底层 kernel 性能
   - icon: 🐛
-    title: 踩坑与调试
-    details: 真实的学习过程，记录遇到的问题、排查思路和解决方案
+    title: 学习过程
+    details: 保留草稿、踩坑和源码阅读，再定期整理成长期可复用的知识节点
 ---

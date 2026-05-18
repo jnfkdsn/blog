@@ -1,5 +1,9 @@
 ---
 order: 3
+title: CUDA 基础语法
+updated: 2026-05-18
+tags: [cuda, gpu, syntax, memory, warp]
+status: draft
 ---
 
 # CUDA 基础语法
@@ -36,8 +40,10 @@ order: 3
 
 ## 3. 内存管理API
 显存分配与释放：
+```cpp
 cudaMalloc(&d_data,size);
 cudaFree(d_data);
+```
 
 数据传输
 ```cpp
@@ -53,7 +59,9 @@ cudaError_t cudaMemcpy(void* dst, const void* src, size_t count, cudaMemcpyKind 
 | `cudaMemcpyHostToHost` | CPU → CPU | 很少用（等于 memcpy） |
 
 初始化显存：
+```cpp
 cudaMemset(d_data,0,size); //清0
+```
 
 ### Pinned Memory（页锁定内存）
 普通的 CPU 内存（`new` / `malloc`）可能被操作系统换到磁盘。`cudaMemcpy` 内部需要先把数据拷到一块 pinned（页锁定）的临时缓冲区，再传给 GPU。
@@ -159,7 +167,7 @@ __global__ void some_kernel(float* data, int n) {
 ```
 - `__syncthreads`只能同步同一个block内的线程
 
-### 5.3 wrap级同步
+### 5.3 warp级同步
 一个 Warp（32 个线程）是 **SIMT（单指令多线程）** 执行的——同一 Warp 内的线程执行相同的指令。在 Volta 架构（sm_70）之后，Warp 内线程可以独立调度，所以需要显式同步：
 
 ```cpp
@@ -183,6 +191,17 @@ __syncwarp(mask);  // 只同步 mask 指定的线程（mask 是 32 位 bitmask�
 // 使用：
 CUDA_CHECK(cudaMalloc(&d_data, size));
 ```
+
+Kernel launch 是异步的，`kernel<<<...>>>()` 本身只负责把任务提交到 GPU。检查 kernel 错误一般分两步：
+
+```cpp
+my_kernel<<<grid, block>>>(d_data, n);
+CUDA_CHECK(cudaGetLastError());        // 检查 launch 配置错误，例如非法 block size
+CUDA_CHECK(cudaDeviceSynchronize());   // 等 kernel 执行完，检查运行时错误
+```
+
+如果后面马上有 `cudaMemcpy(..., cudaMemcpyDeviceToHost)`，它会隐式等待默认 stream 中前面的 kernel 完成。但调试阶段最好显式加 `cudaDeviceSynchronize()`，错误位置更清楚。
+
 ## 7. Grid-Stride Loop 模式
 
 ### 7.1 问题：当数据比线程数多很多
@@ -212,7 +231,7 @@ my_kernel<<<128, 256>>>(d_data, N);  // 只有 32768 个线程，但能处理任
 
 GPU内存层级
 ```
-寄存器 (Register)        ← 最快，每个线程私有，~0 cycle 延迟
+寄存器 (Register)        ← 最快，每个线程私有
     ↓
 共享内存 (Shared Memory)  ← 同一 Block 内的线程共享，~5 cycle
     ↓
@@ -222,11 +241,51 @@ L2 Cache                  ← 所有 SM 共享
 ```
 - 对全局显存访问的特点：当一个线程束（Warp，通常为 32 个线程）同时发起内存请求时，如果这些线程访问的地址是**连续的**且对齐的，硬件会将这些请求合并（Coalesce）为尽可能少的 DRAM 突发传输，这是构成全局显存的DRAM的特性决定的，一旦选中某一行，硬件会连续输出相邻的一组数据块，如果程序不访问连续地址，多读出的数据会被直接丢弃，导致严重的带宽浪费。
 
+Shared Memory 的典型用途是把全局内存中会被重复使用的数据搬到 Block 内共享，减少 global memory 访问。例如 GEMM 中把 A/B 的 tile 先加载到 shared memory，再让多个线程复用。
 
+### static shared memory
 
-## 9. wrap
+大小在编译期确定：
+
+```cpp
+__global__ void kernel(float* x) {
+    __shared__ float smem[256];
+    smem[threadIdx.x] = x[threadIdx.x];
+    __syncthreads();
+}
+```
+
+### dynamic shared memory
+
+大小在 kernel launch 时指定：
+
+```cpp
+__global__ void kernel(float* x) {
+    extern __shared__ float smem[];
+    smem[threadIdx.x] = x[threadIdx.x];
+    __syncthreads();
+}
+
+int block = 256;
+size_t smem_size = block * sizeof(float);
+kernel<<<grid, block, smem_size>>>(d_x);
+```
+
+### bank conflict
+
+Shared Memory 被切成多个 bank。一个 warp 同时访问 shared memory 时，如果多个线程访问落到同一个 bank 的不同地址，就会发生 bank conflict，硬件需要把访问拆成多次执行。
+
+- 连续访问通常比较友好：`smem[threadIdx.x]`
+- 跨 stride 访问容易冲突：`smem[threadIdx.x * stride]`
+- 矩阵转置常用 padding 避免冲突，例如 `tile[32][33]`
+
+### register spill 和 local memory
+
+寄存器是每个线程私有的最快存储。如果一个 kernel 中每个线程使用的寄存器太多，编译器可能把部分变量 spill 到 local memory。local memory 名字里有 local，但实际通常在 global memory 上，访问成本高。Nsight Compute 里看到 local load/store 或寄存器数异常高时，需要检查是否写了太多临时变量、数组或过度展开。
+
+## 9. warp
 warp 是在线程块（block）内部，以 32 个线程为一组进行划分的基本调度单元，是 SM 中最基本的执行单元，一个 SM 可以同时驻留多个 Warp，并且通过 Warp Scheduler 每个时钟周期切换执行不同的 Warp。（SIMT，同一个 Warp 内的 32 个线程在任何时刻执行相同的指令，不同的数据）
-### wrap级操作
+### warp级操作
 Warp Shuffle：线程间直接交换数据
 同一 Warp 内的线程可以**不经过共享内存**直接读取彼此的寄存器值,不需要__syncthreads()进行同步
 
@@ -267,6 +326,26 @@ __device__ float warp_reduce_sum_down(float val) {
 
 ## 10. 原子操作
 
+原子操作用于多个线程同时读写同一个地址时保证结果正确。最常见的是 `atomicAdd`：
+
+```cpp
+__global__ void histogram_or_sum(const float* input, float* output, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) {
+        atomicAdd(output, input[i]);
+    }
+}
+```
+
+原子操作能保证单个地址上的读-改-写不会被其他线程打断，但代价是高竞争时会串行化。如果很多线程都 `atomicAdd` 到同一个地址，性能通常很差。
+
+更常见的优化方式是两阶段归约：
+
+1. 每个 Block 先在 shared memory 或 warp 内完成局部 reduce。
+2. 每个 Block 只用一个线程把局部结果 `atomicAdd` 到全局结果。
+
+这样可以把原子操作次数从 `N` 次降到 `block_num` 次。对应实践可以看 [Reduce 优化实践](/posts/reduce)。
+
 ## 11 Occupancy：GPU 利用率分析
 ### 什么是 Occupancy？
 **Occupancy** = 实际运行的 Warp 数 / SM 最大可运行的 Warp 数
@@ -277,3 +356,5 @@ __device__ float warp_reduce_sum_down(float val) {
 1. **Block Size**：如果 block_size = 64，每个 block 只有 2 个 warp。每 SM 最多 16 个 block → 32 个 warp。而 SM 最多支持 48 个 warp → Occupancy = 67%。
 2. **寄存器使用量**：每 SM 有 65536 个寄存器。如果 kernel 每线程用 128 个寄存器，每个 SM 最多 512 个线程 = 16 个 warp → Occupancy = 33%。
 3. **Shared Memory 使用量**：每 SM 有 ~100 KB shared memory。如果每 block 用 48 KB，每 SM 只能放 2 个 block → 可能限制 occupancy。
+
+Occupancy 高不等于性能一定高。它表示隐藏访存/指令延迟的能力，但不是最终性能指标。比如 GEMM 更关心数据复用、tiling 和 Tensor Core 利用率；Softmax 这类 memory-bound kernel 更关心全局内存访问次数、coalescing 和有效带宽。

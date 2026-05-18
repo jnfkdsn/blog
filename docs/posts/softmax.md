@@ -1,8 +1,16 @@
 ---
 order: 1
+title: Softmax 算子实现与优化
+updated: 2026-05-18
+tags: [cuda, softmax, kernel, memory-bound]
+status: draft
 ---
 
 # Softmax算子实现与优化
+
+相关路线：[GPU 编程与算子优化知识地图](/notes/gpu-programming) / [LLM 推理系统知识地图](/notes/llm-inference)  
+相关基础：[Reduce 优化实践](/posts/reduce) / [Roofline 分析](/notes/cuda/roofline)
+
 ## 计算公式
 给定一个向量 $\mathbf{x} = [x_0, x_1, ..., x_{N-1}]$，Softmax 将其转换为概率分布：
 $$\text{softmax}(x_i) = \frac{e^{x_i}}{\sum_{j=0}^{N-1} e^{x_j}}$$
@@ -173,8 +181,8 @@ y[j] = expf(x[j] - row_max) / row_sum;
 #### 现存的问题
 1. 主要：全局内存读 3 次 
 2. exp计算两次
-3. 树形规约有wrap divergence：当s<32时只有部分线程工作
-4. __syncthreads()过多，**并且s<32时wrap内天然同步，不需要__syncthreads()**
+3. 树形规约有warp divergence：当s<32时只有部分线程工作
+4. __syncthreads()过多，**并且s<32时warp内天然同步，不需要__syncthreads()**
 
 
 
@@ -526,8 +534,5 @@ __global__ void softmax_v5(const float* input, float* output, int M, int N) {
 ```
 ### v5相较于v3/v4
 也是一次读写，但是online softmax在flash attention中，当数据不能全部放入寄存器/shared memory 时，允许以 tile 为单位流式处理（每次只处理一小块，维护全局的 max 和 sum）。
-
-
-
 
 

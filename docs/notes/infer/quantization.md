@@ -1,10 +1,17 @@
 ---
 order: 2
+title: 低比特 LLM 量化综述
+updated: 2026-05-18
+tags: [llm, quantization, inference]
+status: draft
 ---
 
 # A Survey of Low-bit Large Language Models: Basics, Systems, and Algorithms
 
 https://doi.org/10.48550/arXiv.2409.16694
+
+相关路线：[LLM 推理系统知识地图](/notes/llm-inference) / [推理系统笔记](/notes/infer/)  
+相关基础：[CUDA 矩阵乘法](/posts/GEMM) / [Triton GEMM 优化](/posts/triton_gemm)
 
 # 1. Introduction
 
