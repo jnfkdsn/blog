@@ -14,7 +14,7 @@ status: draft
 runtime：memory / call convention / execution support
 ```
 
-### lexer(词法分析器)
+### lexer(词法分析器)和 token
 将源代码转换为一系列的token，token是编程语言的基本元素，如关键字、标识符、运算符等。
 比如：
 
@@ -108,3 +108,15 @@ return x
 控制流可以拆成 basic block
 适合后续构建 CFG、SSA、优化 pass
 ```
+
+### Interpreter(解释器)
+解释器直接执行AST或IR，不生成机器码，适合快速开发和调试
+
+### 不同阶段
+| 阶段 | 输入 | 输出 | 主要问题 |
+| --- | --- | --- | --- |
+| Lexer | 源码字符串 | token 列表 | 每个字符片段属于什么类别 |
+| Parser | token 列表 | AST | 这些 token 组成什么语法结构 |
+| Sema | AST | TypedProgram | 变量、函数、类型是否合法 |
+| Lowering | TypedProgram | IRModule | 怎样把高层结构变成规则指令 |
+| Interpreter | AST 或 IR | 执行结果 | 程序语义是什么 |
