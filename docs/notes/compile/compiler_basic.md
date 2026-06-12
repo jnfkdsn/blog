@@ -19,17 +19,19 @@ runtime：memory / call convention / execution support
 比如：
 
 ```c
-return 1 + 2;
+x = 1 + 2 * y;
 ```
 
-可以被切成：
+Lexer 看到的是字符：
 
 ```text
-return
-1
-+
-2
-;
+'x' ' ' '=' ' ' '1' ' ' '+' ' ' '2' ' ' '*' ' ' 'y' ';'
+```
+
+Token 流是：
+
+```text
+IDENT(x) ASSIGN INT(1) PLUS INT(2) STAR IDENT(y) SEMI
 ```
 
 token 不只是字符串，还可以带类别，行列位置等信息。
@@ -49,6 +51,24 @@ return 语句
 变量引用
 ```
 构建一个树形结构来表示程序的语法结构。
+
+
+例如：
+```text
+IDENT(x) ASSIGN INT(1) PLUS INT(2) STAR IDENT(y) SEMI
+```
+Parser 再根据语法优先级得到 AST：
+
+```text
+Assign
+  target: Name(x)
+  value:
+    Binary(+)
+      Int(1)
+      Binary(*)
+        Int(2)
+        Name(y)
+```
 
 语法分析器parser：负责将token序列转换为AST
 #### 表达式优先级
