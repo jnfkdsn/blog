@@ -74,6 +74,13 @@ Assign
 #### 表达式优先级
 表达式优先级是指在编程语言中，不同的运算符具有不同的优先级，决定了在没有括号明确指定的情况下，运算的顺序。例如，在表达式 `1 + 2 * 3` 中，乘法 `*` 的优先级高于加法 `+`，parser需要按照语法规则创建ast节点
 
+ai compiler中，parser的输出AST会被TorchDynamo捕获并转换为FX Graph，FX Graph是一种中间表示，适合进行后续的优化和代码生成。
+```text
+Python bytecode / frame
+  -> TorchDynamo capture
+  -> FX Graph
+```
+
 ### semantic analysis(语义分析)
 语义分析器负责检查AST的语义正确性，确保程序符合语言的语义规则,语法正确不一定语义合理，比如：
 
@@ -96,6 +103,9 @@ int main() {
 return 是否符合函数返回类型
 void 变量是否合法
 ```
+语义分析仍属于前端。它把“语法正确的 AST”变成“语义正确的 typed AST”。typed AST 的价值是：后续 IR builder 不需要反复猜类型。每个表达式节点都可以带上类型
+
+
 
 ### IR
 AST 很接近源语言结构，适合做语义检查，但不太适合做优化。
