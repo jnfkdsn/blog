@@ -105,7 +105,21 @@ void 变量是否合法
 ```
 语义分析仍属于前端。它把“语法正确的 AST”变成“语义正确的 typed AST”。typed AST 的价值是：后续 IR builder 不需要反复猜类型。每个表达式节点都可以带上类型
 
+AI Compiler 里的语义分析不一定是 type checker，但类似问题一直存在：
 
+- Tensor dtype 是否匹配。
+- Tensor shape 是否可广播。
+- 某个 op 是否支持 dynamic shape。
+- 某个 op 是否有副作用。
+- 某个 graph node 是否能被 lower 到目标后端。
+
+比如 FX Graph 中每个 node 可以带 metadata：
+
+```text
+node.meta["tensor_meta"] = shape / dtype / stride
+```
+
+这和 typed AST 很像。没有这些 metadata，后续 fusion、layout rewrite、codegen 都会很困难。
 
 ### IR
 AST 很接近源语言结构，适合做语义检查，但不太适合做优化。
