@@ -153,6 +153,54 @@ return x
 适合后续构建 CFG、SSA、优化 pass
 ```
 
+#### SSA、Use-Def、Phi
+
+SSA 是 Static Single Assignment：每个 SSA value 只被定义一次。
+
+SSA 的好处是 use-def 关系非常清楚。每个 use 都能追到唯一 def。
+
+分支合流时需要 phi：
+
+```c
+if (c) {
+  x = 1;
+} else {
+  x = 2;
+}
+return x;
+```
+
+SSA：
+
+```text
+entry:
+  br c, then0, else0
+
+then0:
+  x1 = const 1
+  jump merge0
+
+else0:
+  x2 = const 2
+  jump merge0
+
+merge0:
+  x3 = phi [then0: x1], [else0: x2]
+  ret x3
+```
+
+phi 的含义不是运行时调用函数，而是根据控制流来源选择对应 value。
+SSA 是现代编译器中端优化的核心表示之一。
+它让很多分析变简单：
+- constant propagation 更容易追踪定义。
+- DCE 更容易判断结果有没有 use。
+- CSE 更容易比较表达式。
+- register allocation 前可以从 SSA 结构得到 live range。
+但 SSA 对 memory 不那么简单。数组、指针、load/store 会引入 alias 问题。
+
+
+
+
 ### Interpreter(解释器)
 解释器直接执行AST或IR，不生成机器码，适合快速开发和调试
 
