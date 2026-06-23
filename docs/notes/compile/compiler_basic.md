@@ -211,4 +211,4 @@ SSA 是现代编译器中端优化的核心表示之一。
 | Parser | token 列表 | AST | 这些 token 组成什么语法结构 |
 | Sema | AST | TypedProgram | 变量、函数、类型是否合法 |
 | Lowering | TypedProgram | IRModule | 怎样把高层结构变成规则指令 |
-| Interpreter | AST 或 IR | 执行结果 | 程序语义是什么 |
+| Interpreter | AST 或 IR | 执行结果 | 程序语义是什么 | 
