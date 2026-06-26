@@ -2,15 +2,15 @@
 layout: home
 
 hero:
-  name: "CUDA & AI Infra"
+  name: "CUDA"
   text: "学习记录"
-  tagline: GPU 编程 · Kernel 优化 · CMake 构建 · 高性能计算
+  tagline: GPU 编程 · Kernel 优化
   actions:
     - theme: brand
-      text: 知识库入口 →
+      text: 知识库
       link: /notes/
     - theme: alt
-      text: GPU 编程地图
+      text: GPU 编程
       link: /notes/gpu-programming
     - theme: alt
       text: GitHub
