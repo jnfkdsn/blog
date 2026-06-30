@@ -198,6 +198,47 @@ SSA 是现代编译器中端优化的核心表示之一。
 - register allocation 前可以从 SSA 结构得到 live range。
 但 SSA 对 memory 不那么简单。数组、指针、load/store 会引入 alias 问题。
 
+### Dataflow Analysis
+
+Dataflow analysis 用来回答“程序某个点上一定/可能知道什么信息”。
+
+典型问题：
+
+- Reaching definitions：哪些定义可能到达当前点？
+- Liveness：某个变量之后是否还会被使用？
+- Available expressions：某个表达式是否已经计算过并且仍然有效？
+- Constant propagation：某个 value 是否一定是某个常量？
+
+Dataflow analysis 通常由几个元素组成：
+
+```text
+方向：forward 或 backward
+格：信息集合及其合并方式
+transfer function：一个 block 如何改变信息
+meet/join：多个前驱或后继的信息如何合并
+fixed point：不断迭代直到信息不再变化
+```
+
+例如 liveness 是 backward analysis：
+
+```text
+live_in[B] = use[B] union (live_out[B] - def[B])
+live_out[B] = union live_in[S] for S in succ[B]
+```
+
+它从程序后面往前传播，因为一个变量是否活跃取决于未来是否会用。
+
+
+Dataflow analysis 是优化 pass 的基础，很多 pass 需要根据分析结果改写。
+
+比如：
+
+- DCE 需要知道某个定义结果有没有后续 use。
+- LICM 需要知道循环中哪些定义不变。
+- Register allocation 需要 liveness。
+- Constant propagation 需要在 CFG 上传播常量状态。
+
+### Optimization Pass Pipeline
 
 
 
