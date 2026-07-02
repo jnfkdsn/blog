@@ -15,6 +15,7 @@ order: 0
 
 - [CUDA 学习笔记](/notes/cuda/)：线程模型、内存层次、同步、构建系统和性能分析。
 - [Triton 学习笔记](/notes/triton/)：Triton 编程模型、softmax、GEMM、autotune。
+- [编译器学习笔记](/notes/compile/)：传统编译器基础、IR/SSA、优化 pass、后端和 AI Compiler 衔接。
 - [Ascend C 算子编程知识库](/notes/CANN/Ascend_C)：AI Core 编程模型、片上流水、tiling、调试和算子优化清单。
 - [推理系统笔记](/notes/infer/)：LLM 架构、Flash Attention、量化、nano-vLLM 源码阅读。
 
