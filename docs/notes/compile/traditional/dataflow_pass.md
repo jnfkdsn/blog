@@ -8,7 +8,7 @@ status: draft
 
 # Dataflow Analysis 与 Pass Pipeline
 
-相关入口：[编译器学习笔记](/notes/compile/) / [IR、CFG、SSA](/notes/compile/ir_ssa_cfg)
+相关入口：[传统编译器](/notes/compile/traditional/) / [IR、CFG、SSA](/notes/compile/traditional/ir_ssa_cfg)
 
 Dataflow analysis 回答的是：在程序某个点上，编译器能确定什么信息。Optimization pass 利用这些信息做语义保持的 IR 改写。
 
@@ -38,26 +38,7 @@ Backward analysis 从后往前传播，例如 liveness。
 
 ## Liveness
 
-Liveness 回答：某个变量在程序点之后还会不会被使用。
-
-例子：
-
-```text
-B1:
-  a = const 1
-  b = const 2
-  c = add a, b
-  ret c
-```
-
-从后往前看：
-
-```text
-ret c      -> c live
-c = add a,b -> a,b live; c 被定义
-b = const 2 -> b 被定义
-a = const 1 -> a 被定义
-```
+Liveness 回答：某个变量在程序点之后还会不会被使用。它是 backward analysis，因为一个值是否 live 取决于未来路径是否还会使用它。
 
 Block 级公式：
 
@@ -65,8 +46,6 @@ Block 级公式：
 live_in[B]  = use[B] union (live_out[B] - def[B])
 live_out[B] = union live_in[S] for S in succ[B]
 ```
-
-例子：
 
 ```text
 B1:
@@ -110,8 +89,6 @@ meet(CONST(1), CONST(2)) = TOP
 meet(TOP, anything) = TOP
 ```
 
-例子：
-
 ```text
 entry:
   br %cond, then0, else0
@@ -131,7 +108,7 @@ merge0:
 
 `x3` 合并两个 `CONST(1)`，仍然是 `CONST(1)`，所以 `y` 可以变成 `CONST(3)`。
 
-如果 else 分支是 `x2 = const 2`，`x3` 会变成 `TOP`，`y` 不能折叠成单个常量。
+如果 else 分支是 `x2 = const 2`，`x3` 会变成 `TOP`，`y` 不能折叠成单个常量。这个例子对应的是“不同前驱的信息如何合并”。
 
 ## Fixed Point 迭代
 
@@ -266,8 +243,6 @@ unreachable block -> delete
 block with single pred/succ -> merge
 ```
 
-例子：
-
 ```text
 B0:
   br true, B1, B2
@@ -336,32 +311,7 @@ for pass in pipeline:
 
 ## Pass 测试
 
-Pass 测试比端到端测试更细。
-
-输入 IR：
-
-```text
-func @f(%x, %y) {
-entry:
-  %0 = add %x, %y
-  %1 = add %x, %y
-  %2 = mul %0, %1
-  ret %2
-}
-```
-
-期望 IR：
-
-```text
-func @f(%x, %y) {
-entry:
-  %0 = add %x, %y
-  %2 = mul %0, %0
-  ret %2
-}
-```
-
-工程里常用两类断言：
+Pass 测试比端到端测试更细。工程里常用两类断言：
 
 - 文本 IR FileCheck：检查关键指令是否存在或消失。
 - 语义测试：优化前后执行结果一致。

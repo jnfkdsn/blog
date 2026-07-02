@@ -8,16 +8,12 @@ status: draft
 
 # 编译器学习笔记
 
-这组笔记负责传统编译器基础和 AI Compiler 的衔接。传统编译器部分先覆盖前端、中端、后端、runtime 的骨架；AI Compiler 部分后续再单独展开 PyTorch compile、FX/Inductor、MLIR/TVM、Triton lowering、dynamic shape、layout 和 fusion。
+这组笔记分成两条线：传统编译器基础和 AI Compiler。传统编译器负责建立 IR、CFG、SSA、pass、lowering、runtime 等底层概念；AI Compiler 负责把这些概念映射到 tensor graph、shape/layout、fusion、kernel lowering 和 runtime execution。
 
-## 传统编译器
+## 目录
 
-- [编译器基础知识地图](/notes/compile/compiler_basic)：整体 pipeline 和学习顺序。
-- [前端：Lexer、Parser、AST、语义分析](/notes/compile/frontend_ast_sema)：源码如何变成 typed AST。
-- [IR、CFG、SSA](/notes/compile/ir_ssa_cfg)：中端表示、控制流、use-def、phi、dominance。
-- [Dataflow Analysis 与 Pass Pipeline](/notes/compile/dataflow_pass)：分析、优化 pass、pass manager、测试方式。
-- [Lowering、Codegen、Runtime](/notes/compile/lowering_codegen_runtime)：后端下沉、寄存器分配、调用约定、解释器和 JIT。
-- [循环优化](/notes/compile/loop_optimization)：LICM、unroll、tiling、interchange、dependence analysis、vectorization。
+- [传统编译器](/notes/compile/traditional/)：前端、中端、后端、runtime 的基础机制。
+- [AI Compiler](/notes/compile/ai-compiler/)：PyTorch compile、FX/Inductor、MLIR/TVM、Triton lowering、dynamic shape、layout、fusion。
 
 ## 和 AI Compiler 的连接
 

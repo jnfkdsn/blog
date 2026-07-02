@@ -8,7 +8,7 @@ status: draft
 
 # 前端：Lexer、Parser、AST、语义分析
 
-相关入口：[编译器学习笔记](/notes/compile/) / [编译器基础知识地图](/notes/compile/compiler_basic)
+相关入口：[传统编译器](/notes/compile/traditional/) / [编译器基础](/notes/compile/traditional/compiler_basic)
 
 前端把源码字符串变成后续阶段能处理的结构化程序。它的输出通常不是最终可优化的 IR，而是带语义信息的 AST 或 typed AST。
 
@@ -25,12 +25,6 @@ Lexer 负责把字符流切成 token。token 不只是字符串，还包含类�
 
 ```c
 x = 1 + 2 * y;
-```
-
-字符流：
-
-```text
-'x' ' ' '=' ' ' '1' ' ' '+' ' ' '2' ' ' '*' ' ' 'y' ';'
 ```
 
 token 流：
@@ -96,7 +90,7 @@ Parser 需要解决两个问题：
 
 表达式 `1 + 2 * 3` 不能解析成 `(1 + 2) * 3`，因为 `*` 优先级高于 `+`。
 
-一种常见实现是 recursive descent 按优先级分层：
+一种常见实现是 recursive descent 按优先级分层：优先级越低的运算放在越外层函数，优先级越高的运算放在越内层函数。
 
 ```text
 parseExpr      -> parseAdd
@@ -126,7 +120,7 @@ parseAdd
   return Binary(+, Int(1), Binary(*, Int(2), Name(y)))
 ```
 
-Pratt parser 也是表达式解析常用方法，特点是用 binding power 表示优先级：
+Pratt parser 也是表达式解析常用方法，特点是用 binding power 表示优先级：给每个运算符一个“绑定力” binding power，绑定力越强，越先结合。
 
 ```text
 parse_expr(min_bp):
@@ -138,7 +132,7 @@ parse_expr(min_bp):
   return lhs
 ```
 
-Pratt parser 对新增运算符比较友好；recursive descent 对语法结构更直观。
+Pratt parser 对新增运算符比较友好；recursive descent 对语法结构更直观。基础阶段先掌握“低优先级函数调用高优先级函数”这个机制即可。
 
 ## AST 设计
 

@@ -8,7 +8,7 @@ status: draft
 
 # IR、CFG、SSA
 
-相关入口：[编译器学习笔记](/notes/compile/) / [编译器基础知识地图](/notes/compile/compiler_basic)
+相关入口：[传统编译器](/notes/compile/traditional/) / [编译器基础](/notes/compile/traditional/compiler_basic)
 
 IR 是编译器中端处理程序的主要形式。AST 接近源语言，IR 更接近“规则化的程序操作序列”。
 
@@ -312,6 +312,100 @@ x = a[j];
 - 简单编译器：把 load/store 当作有副作用，少做激进优化。
 - LLVM：用 memory dependence、alias analysis、MemorySSA 等机制分析内存。
 - AI Compiler：tensor 通常是较大粒度的 value，但 view、in-place、alias、mutation 仍然复杂。
+
+### mem2reg
+
+`mem2reg` 是把栈上的局部变量从 memory 形式提升成 SSA value 的优化。它处理的是一种比较简单、但非常常见的 memory 模式：
+
+```text
+alloca x
+store value, &x
+load &x
+```
+
+如果 `x` 只是函数内部的局部变量，地址没有逃逸，编译器可以把对 `x` 的 `load/store` 改成普通 SSA value。核心规则：
+
+- `alloca` 代表一个可提升的局部变量槽位。
+- `store value, &x` 变成变量 `x` 的一个新 SSA 定义。
+- `load &x` 替换成当前位置可见的 SSA 定义。
+- 控制流合流处如果能看到多个定义，用 phi 合并。
+- 提升后，后续 constant propagation、DCE、CSE 更容易工作。
+
+源程序：
+
+```c
+int x = 0;
+if (c) {
+  x = 1;
+} else {
+  x = 2;
+}
+return x;
+```
+
+memory 形式 IR：
+
+```text
+entry:
+  %x.addr = alloca i32
+  store 0, %x.addr
+  br %c, then0, else0
+
+then0:
+  store 1, %x.addr
+  jump merge0
+
+else0:
+  store 2, %x.addr
+  jump merge0
+
+merge0:
+  %0 = load %x.addr
+  ret %0
+```
+
+mem2reg 后：
+
+```text
+entry:
+  %x0 = const 0
+  br %c, then0, else0
+
+then0:
+  %x1 = const 1
+  jump merge0
+
+else0:
+  %x2 = const 2
+  jump merge0
+
+merge0:
+  %x3 = phi [then0: %x1], [else0: %x2]
+  ret %x3
+```
+
+`merge0` 的 `load %x.addr` 不能简单替换成某一个 value，因为控制流可能来自 `then0`，也可能来自 `else0`。phi 表示根据前驱 block 选择对应定义。
+
+处理流程：
+
+1. 找出可提升的 `alloca`。
+2. 在需要合流的位置插入 phi。
+3. 沿 CFG 重命名变量，把 `load/store` 改成 SSA value。
+
+可提升的 `alloca` 通常满足：
+
+- 是函数内局部变量。
+- 只被 `load/store` 使用。
+- 地址没有传给其他函数。
+- 地址没有存到别的内存里。
+- 没有复杂指针运算。
+
+不能直接提升的情况：
+
+- `&x` 传给函数，地址可能被修改或保存。
+- 地址存入其他内存，后续可能通过别名访问。
+- 变量是数组，`a[i]` 和 `a[j]` 是否相同需要 index/alias analysis。
+- 变量是结构体或聚合对象，需要先用 SROA 之类的优化拆成字段。
 
 ## IR 数据结构感
 

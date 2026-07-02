@@ -8,7 +8,7 @@ status: draft
 
 # 循环优化
 
-相关入口：[编译器学习笔记](/notes/compile/) / [Dataflow Analysis 与 Pass Pipeline](/notes/compile/dataflow_pass)
+相关入口：[传统编译器](/notes/compile/traditional/) / [Dataflow Analysis 与 Pass Pipeline](/notes/compile/traditional/dataflow_pass)
 
 循环优化是传统编译器和 AI Compiler 都绕不开的主题。传统编译器里它决定 CPU cache、vectorization、分支和寄存器压力；AI Compiler 里它对应 tensor loop、tiling、fusion、memory hierarchy、kernel schedule。
 

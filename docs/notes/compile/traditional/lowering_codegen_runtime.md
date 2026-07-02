@@ -8,7 +8,7 @@ status: draft
 
 # Lowering、Codegen、Runtime
 
-相关入口：[编译器学习笔记](/notes/compile/) / [IR、CFG、SSA](/notes/compile/ir_ssa_cfg)
+相关入口：[传统编译器](/notes/compile/traditional/) / [IR、CFG、SSA](/notes/compile/traditional/ir_ssa_cfg)
 
 前端和中端解决“程序是什么意思”和“程序能怎么改写”。后端和 runtime 解决“程序怎么在目标机器上执行”。
 
@@ -26,7 +26,7 @@ high-level IR
 
 Lowering 把高层语义逐步变成低层语义。
 
-例如高层 IR：
+高层 IR：
 
 ```text
 %z = tensor.add %x, %y : tensor<1024xf32>
@@ -39,7 +39,7 @@ for i in 0..1024:
   z[i] = x[i] + y[i]
 ```
 
-Lowering 到更低层：
+继续 lowering 到标量 load/store：
 
 ```text
 ptr_x = base_x + i * 4
@@ -68,7 +68,7 @@ IR：
 %2 = add %0, %1
 ```
 
-目标机器可能有：
+目标机器可能有多种实现方式：
 
 ```text
 ADD r2, r0, r1
@@ -147,23 +147,6 @@ caller-saved registers
 callee-saved registers
 stack frame 布局
 栈对齐规则
-```
-
-函数调用示意：
-
-```text
-caller:
-  move arg0 -> r0
-  move arg1 -> r1
-  call f
-  read return value from r0
-
-callee f:
-  save callee-saved registers
-  allocate stack frame
-  compute
-  restore registers
-  ret
 ```
 
 Runtime、FFI、JIT 都需要遵守调用约定，否则编译出来的代码无法和系统或库函数正确交互。

@@ -28,11 +28,11 @@ AI Compiler 的输入不一定是传统源码，也可能是 Python bytecode、F
 
 ## 笔记结构
 
-- [前端：Lexer、Parser、AST、语义分析](/notes/compile/frontend_ast_sema)：从源码字符串到 typed AST，重点是 token、表达式优先级、符号表和类型检查。
-- [IR、CFG、SSA](/notes/compile/ir_ssa_cfg)：从 AST lowering 到控制流图和 SSA，重点是 basic block、phi、dominance、use-def。
-- [Dataflow Analysis 与 Pass Pipeline](/notes/compile/dataflow_pass)：分析如何驱动优化，重点是 liveness、constant propagation、DCE、CSE、pass manager。
-- [Lowering、Codegen、Runtime](/notes/compile/lowering_codegen_runtime)：从中端 IR 到机器相关实现，重点是指令选择、寄存器分配、调用约定、解释器/JIT。
-- [循环优化](/notes/compile/loop_optimization)：循环识别、LICM、unroll、tiling、interchange、dependence analysis、vectorization。
+- [前端：Lexer、Parser、AST、语义分析](/notes/compile/traditional/frontend_ast_sema)：从源码字符串到 typed AST，重点是 token、表达式优先级、符号表和类型检查。
+- [IR、CFG、SSA](/notes/compile/traditional/ir_ssa_cfg)：从 AST lowering 到控制流图和 SSA，重点是 basic block、phi、dominance、use-def。
+- [Dataflow Analysis 与 Pass Pipeline](/notes/compile/traditional/dataflow_pass)：分析如何驱动优化，重点是 liveness、constant propagation、DCE、CSE、pass manager。
+- [Lowering、Codegen、Runtime](/notes/compile/traditional/lowering_codegen_runtime)：从中端 IR 到机器相关实现，重点是指令选择、寄存器分配、调用约定、解释器/JIT。
+- [循环优化](/notes/compile/traditional/loop_optimization)：循环识别、LICM、unroll、tiling、interchange、dependence analysis、vectorization。
 
 ## 一个程序穿过编译器
 
