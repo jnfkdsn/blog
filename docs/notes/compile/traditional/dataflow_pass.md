@@ -12,7 +12,7 @@ status: draft
 
 Dataflow analysis 回答的是：在程序某个点上，编译器能确定什么信息。Optimization pass 利用这些信息做语义保持的 IR 改写。
 
-```text
+```text 
 IR + CFG
   -> analysis: liveness / reaching definition / constant propagation
   -> transform pass: DCE / CSE / LICM / CFG simplification
