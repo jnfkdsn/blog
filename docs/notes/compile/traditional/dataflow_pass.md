@@ -33,7 +33,6 @@ fixed point：迭代到信息不再变化
 ```
 
 Forward analysis 从前往后传播，例如 reaching definitions、constant propagation。
-
 Backward analysis 从后往前传播，例如 liveness。
 
 ## Liveness
