@@ -15,8 +15,6 @@
        -> tensor<1024xf32>
 ```
 
-你可以把它读成：
-
 ```text
 用 maxf 做逐元素二元计算：
 输入：%arg0、%arg1
@@ -24,38 +22,6 @@
 结果类型：tensor<1024xf32>
 ```
 
-重点看这三个部分：
-
-```mlir
-ins(...)
-outs(...)
--> tensor<...>
-```
-
-这是 MLIR linalg 风格的 destination-style 写法。HFusion 很多 op 也沿用了这个形式。
-
-为什么要有 `outs`？
-
-因为后端很关心“结果写到哪里”。对于 bufferization、tiling、fusion 来说，这比纯 SSA 表达更接近真实内存行为。
-
-普通数学表达可能是：
-
-```text
-c = a + b
-```
-
-HFusion 更喜欢表达成：
-
-```text
-把 a 和 b 读进来，把结果写到 out 这个目标里
-```
-
-所以写成：
-
-```mlir
-ins(%a, %b)
-outs(%out)
-```
 
 ---
 
