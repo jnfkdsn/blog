@@ -27,7 +27,7 @@
 
 **HFusion structured op 是什么**
 
-在 [HFusionStructuredOps.td](E:/jnfkdsn/Desktop/compiler/ascendnpu-ir/bishengir/include/bishengir/Dialect/HFusion/IR/HFusionStructuredOps.td) 里，很多 HFusion op 都继承了类似这样的基类：
+在HFusionStructuredOps.td里，很多 HFusion op 都继承了类似这样的基类：
 
 ```tablegen
 HFusionStructuredBase_Op
