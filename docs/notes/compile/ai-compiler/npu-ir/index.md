@@ -36,6 +36,7 @@ NPU IR 算子融合的核心任务：
 | 笔记 | 内容 |
 |---|---|
 | [NPU IR 表示](/notes/compile/ai-compiler/npu-ir/graph_ir) | op、tensor value、use-def、side effect、graph invariants |
+| [HFusion IR](/notes/compile/ai-compiler/npu-ir/hfusion) | HFusion structured op、ins/outs、常见 op、转换关系 |
 | [Shape、Dtype、Layout Metadata](/notes/compile/ai-compiler/npu-ir/metadata_shape_layout) | shape/dtype/layout/format/alias 信息如何支撑融合 |
 | [算子融合总览](/notes/compile/ai-compiler/npu-ir/fusion_overview) | 融合类型、收益来源、失败原因 |
 | [Fusion Legality](/notes/compile/ai-compiler/npu-ir/fusion_legality) | 能不能融合：语义、依赖、alias、layout、后端支持 |
