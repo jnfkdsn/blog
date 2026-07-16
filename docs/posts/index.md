@@ -12,6 +12,7 @@ order: 0
 - [Softmax 算子实现与优化](/posts/softmax)
 - [Transpose 访存优化](/posts/transpose)
 - [CUDA 矩阵乘法](/posts/GEMM)
+- [Tensor Core GEMM 实践](/posts/tensor_core_gemm)
 - [Triton GEMM 优化](/posts/triton_gemm)
 
 ## 相关地图

@@ -1,7 +1,7 @@
 ---
 order: 3
 title: CUDA 矩阵乘法
-updated: 2026-05-18
+updated: 2026-07-16
 tags: [cuda, gemm, tiling, tensor-core]
 status: draft
 ---
@@ -425,7 +425,7 @@ __global__ void matmul_v4(const float* A, const float* B, float* C,
 > - `float4` 读取要求**16-byte 对齐**。`A[globalRow * K + globalCol]` 必须是 16 的倍数（字节地址）。当 K 不是 4 的倍数时，float4 加载可能跨页 → 要特殊处理边界。
 
 
-## CUDA V5 双缓冲
+## CUDA V5 双缓冲结构（同步搬运版本）
 V2-V4 的流水线中，**加载**和**计算**是交替进行的：
 
 ```
@@ -440,10 +440,10 @@ V4 的执行时间线（一个 tile 迭代）:
   加载和计算互相等待 → pipeline bubble
 ```
 
-**双缓冲**：用**两份 shared memory**，一份给当前计算，一份给下一次预取。
+**双缓冲结构**：用**两份 shared memory**，一份保存当前计算 tile，一份保存下一 tile。两份 buffer 解决的是生命周期和覆盖问题；要让搬运真正与计算重叠，还需要异步 copy 或独立的生产者/消费者执行方式。
 
 ```
-双缓冲流水线:
+理想的异步双缓冲流水线:
 
   SMEM Buffer A (下标 0):  ████ Load t   ↓              ████ Load t+2
   SMEM Buffer B (下标 1):            ████ Load t+1               ████ Load t+3
@@ -452,6 +452,8 @@ V4 的执行时间线（一个 tile 迭代）:
 
   加载 tile t+1 和计算 tile t 重叠 → 隐藏内存延迟
 ```
+
+下面的 V5 先建立 ping-pong buffer，但 `load_tile()` 仍使用普通 global load + shared store。同一线程必须先完成相关 load/store 才能安全消费数据，因此这版不能仅凭两份 buffer 就认为已经得到上图的稳定重叠。它更准确的作用是为下一版 `cp.async` 准备 stage 结构。
 
 ```cpp
 #define BM 128
@@ -527,12 +529,12 @@ __global__ void matmul_v5(const float* A, const float* B, float* C,
     load_tile(0, 0);
     __syncthreads();
 
-    // ===== 主循环: 计算当前 tile + 预取下一个 tile =====
+    // ===== 主循环: 填充下一 buffer，再计算当前 buffer =====
     for (int t = 0; t < numTiles; t++) {
         int curBuf = t % 2;
         int nxtBuf = 1 - curBuf;
 
-        // 预取下一个 tile（如果还有）
+        // 普通同步 load/store：这里是填充下一 buffer，不是真正的 async prefetch
         if (t + 1 < numTiles) {
             load_tile(nxtBuf, t + 1);
         }
@@ -553,7 +555,7 @@ __global__ void matmul_v5(const float* A, const float* B, float* C,
                     regC[m][n] += regA[m] * regB[n];
         }
 
-        __syncthreads();  // 确保预取完成后再进入下一轮
+        __syncthreads();  // 确保所有线程读完当前 buffer，并写完下一 buffer
     }
 
     // ===== 写回 C (向量化) =====
@@ -578,14 +580,16 @@ __global__ void matmul_v5(const float* A, const float* B, float* C,
 ```
 
 ```
-V5 vs V4:
-  SMEM 用量: 8 KB × 2 = 16 KB (仍在 sm_86 的 100 KB 限制内)
-  加载-计算重叠: 隐藏 ~50-80% 的 HBM 延迟
+V5 相对 V4:
+  - SMEM 用量从 8 KB 增加为 16 KB。
+  - 明确了 current/next buffer 的生命周期。
+  - 普通 load/store 没有建立可验证的异步 copy-compute 重叠。
 
-  进一步优化需要:
-    - SMEM bank conflict 消除（swizzle/padding）
-    - Warp-level tiling（把 BM×BN tile 再分配给 warp）
-    - 使用 cp.async 指令直接从 HBM 到 SMEM（绕过寄存器）
+下一步:
+  - 用 cp.async / cuda::pipeline 实现 global -> shared 异步搬运。
+  - 比较 1/2/3 stages 下的 duration、stall、SMEM 与 occupancy。
+  - 消除 SMEM bank conflict（swizzle/padding）。
+  - 引入 warp-level tiling 和 Tensor Core MMA。
 ```
 
 
@@ -596,4 +600,4 @@ V5 vs V4:
 
 
 
-11
+相关笔记：[Ampere 异步拷贝与软件流水线](/notes/cuda/async_pipeline) / 后续实践：[Tensor Core GEMM 实践](/posts/tensor_core_gemm)

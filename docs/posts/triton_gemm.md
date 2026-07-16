@@ -1,7 +1,7 @@
 ---
 order: 4
 title: Triton GEMM 优化
-updated: 2026-05-18
+updated: 2026-07-16
 tags: [triton, gemm, tensor-core, fp8]
 status: draft
 ---
@@ -212,7 +212,7 @@ group_inner=5 -> (m1, n1)
 ```
 1. **1D Grid**：把二维 `(pid_m, pid_n)` 压成一维 `pid`，然后在 kernel 内部用 super-grouping 公式映射回 `(pid_m, pid_n)`。这样可以控制 program 的调度顺序。
 
-## FP16和tensor core
+## FP16 和 Tensor Core
 
 ### 浮点数类型
 
@@ -229,7 +229,7 @@ FP16：有效精度位更多一点，但动态范围小，训练时更容易 ove
 
 ### Triton使用FP16
 
-在 Triton 中使用 Tensor Core 只需要输入是 FP16 且用 `tl.dot`，编译器自动映射：
+Triton 使用 `tl.dot` 表达块级矩阵乘。输入类型、block shape、layout、对齐和目标架构满足约束时，编译器可以把它下沉到 Tensor Core：
 
 ```python
 a = torch.randn(M, K, device='cuda', dtype=torch.float16)
@@ -248,19 +248,20 @@ c = accumulator.to(tl.float16)  # 最终结果转回 fp16
 - FP16 减少数据传输量
 - FP32 累加避免精度损失（FP16 的有效位数只有 10 bit，大矩阵的累加会丢失精度）
 
-### Tensor Core 对 BLCOK_SIZE的要求
-Tensor Core 的最小操作单元是 **16×16×16**：
+### Tensor Core 对 BLOCK_SIZE 的要求
+
+WMMA 常用逻辑 tile 是 **16×16×16**：
 ```
 Tensor Core 运算: D[16×16] = A[16×16] × B[16×16] + C[16×16]
 ```
 
-所以 `BLOCK_SIZE_M`、`BLOCK_SIZE_N`、`BLOCK_SIZE_K` 都必须是 **16 的倍数**。常用配置：
+Ampere PTX 层的实际 MMA instruction shape 还包括 `m16n8k16`、`m16n8k8` 等。Triton 的 `BLOCK_SIZE_M/N/K` 是 program tile，不等于单条 MMA 指令，但通常要选择能被目标 MMA tile 合理分解的尺寸。常用配置：
 ```python
 BLOCK_SIZE_M = 128  
 BLOCK_SIZE_N = 128  
 BLOCK_SIZE_K = 32  
 ```
-BLOCK_SIZE不是16的整倍数会退回CUDA Core
+如果 shape、dtype 或 layout 不满足 Tensor Core lowering 条件，编译器可能选择其他 dot 实现，或者产生大量 padding/mask 浪费。是否走 Tensor Core 应通过生成的 PTX/SASS 和 profiler 验证，不能只根据 `tl.dot` 判断。
 
 ## FP8 GEMM
 
@@ -277,9 +278,14 @@ DeepSeek FP8 GEMM:
   用于把原始 FP16/FP32 值映射到 FP8 的有限范围内。
 ```
 
-### triton FP8
+### Triton FP8 与架构边界
+
+FP8 GEMM 是否能直接映射到 Tensor Core 取决于 GPU 架构。Hopper 及后续架构提供原生 FP8 Tensor Core 路径；RTX 3090 属于 Ampere SM86，没有原生 FP8 MMA。因此在 3090 上，这一节首先用于理解 FP8 表示和 scaling，不应预期下面的逻辑直接得到原生 FP8 Tensor Core 性能。
+
+在支持原生 FP8 MMA 的目标架构上，逻辑计算可以写成：
+
 ```
-# FP8 × FP8 → FP32 累加（Tensor Core 原生支持）
+# 是否下沉到原生 FP8 Tensor Core 由目标架构和 lowering 条件决定
 accumulator += tl.dot(a, b)
 # 应用缩放因子并输出
 c = accumulator * scale_a * scale_b
@@ -293,8 +299,8 @@ def quantize_to_fp8(x: torch.Tensor):
     """将fp16/fp32tensor 量化为E4M3"""
     # 计算 per-tensor 缩放因子
     amax = x.abs().max().item()
-    # FP8 E4M3 的最大值是 240
-    scale = 240.0 / amax if amax > 0 else 1.0
+    fp8_max = torch.finfo(torch.float8_e4m3fn).max
+    scale = fp8_max / amax if amax > 0 else 1.0
     # 量化
     x_scaled = x.float() * scale
     x_fp8 = x_scaled.to(torch.float8_e4m3fn)
@@ -315,10 +321,12 @@ c = matmul_fp8(a_fp8, b_fp8, scale_a, scale_b)
 Per-tensor scaling（简单但精度较低）:
   整个矩阵共享一个 scale → 异常值会挤压其他值的精度
 
-Per-block scaling（DeepSeek-V3 使用）:
-  每 128×128 的 block 有独立的 scale → 更好的精度
+Per-block scaling:
+  每个小 block 共享一个 scale → 更好的局部动态范围
   但增加了 scale 的存储和计算开销
 
 Per-channel scaling（AWQ 等量化方法）:
   每个 output channel 一个 scale → 权重量化的常用方案
 ```
+
+相关基础：[低精度数值与混合精度计算](/notes/cuda/low_precision) / [Tensor Core 编程](/notes/cuda/tensor_core)
