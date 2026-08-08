@@ -1,7 +1,7 @@
 ---
 order: 5
 title: 低精度数值与混合精度计算
-updated: 2026-07-16
+updated: 2026-08-08
 tags: [cuda, fp16, bf16, tf32, mixed-precision, tensor-core]
 status: draft
 ---
