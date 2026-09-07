@@ -42,6 +42,7 @@ export default withSidebar(vitePressConfig, [
   {
     documentRootPath: '/docs',
     scanStartPath: 'notes',
+    excludeFilesByFrontmatterFieldName: 'excludeFromSidebar',
     resolvePath: '/notes/',
     useTitleFromFileHeading: true,
     useFolderTitleFromIndexFile: true,

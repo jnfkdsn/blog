@@ -36,10 +36,11 @@ model / python function / graph
 | Tensor IR / Schedule | loop nest、tiling、vectorization、buffer、memory scope | 基础展开，NPU 约束深入 |
 | Lowering | graph/tensor IR 如何下沉到 NPU kernel/library | 基础展开，NPU 约束深入 |
 | Runtime | memory planning、workspace、stream/event、cache、guard | 基础展开，融合相关深入 |
-| 系统专题 | PyTorch Inductor、MLIR、TVM、XLA | 暂不生成详细内容 |
+| 系统专题 | PyTorch Compiler、StableHLO、MLIR、TVM、XLA | 路线展开，后续按实验逐步验证 |
 
 ## AI Compiler 基础
 
+- [AI Compiler 全景图与 Workspace 学习路线](/notes/compile/ai-compiler/stack_and_roadmap)：统一 LLVM、MLIR、StableHLO、PyTorch Compiler、TVM、TensorRT、Triton、TileLang、AscendNPU IR 与 CANN 的定位，并作为整个 workspace 的规范性学习主线。
 - [AI Compiler 基础](/notes/compile/ai-compiler/basics/)：基础专题入口。
 - [AI Compiler Pipeline](/notes/compile/ai-compiler/basics/pipeline)：从模型/graph 到 runtime execution 的整体链路。
 - [Graph IR 基础](/notes/compile/ai-compiler/basics/graph_ir_basics)：op、tensor value、metadata、side effect、use-def。

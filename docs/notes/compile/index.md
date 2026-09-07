@@ -13,6 +13,7 @@ status: draft
 ## 目录
 
 - [传统编译器](/notes/compile/traditional/)：前端、中端、后端、runtime 的基础机制。
+- [MLIR 技术文档](/notes/compile/mlir/)：核心概念、方言语义、编译器机制与贯通教程，配套学习路径和覆盖表。
 - [AI Compiler](/notes/compile/ai-compiler/)：PyTorch compile、FX/Inductor、MLIR/TVM、Triton lowering、dynamic shape、layout、fusion。
 
 ## 和 AI Compiler 的连接
