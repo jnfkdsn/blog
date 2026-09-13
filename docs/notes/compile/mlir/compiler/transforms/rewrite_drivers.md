@@ -363,7 +363,7 @@ converged=0 changed=1
 
 现在可以把执行过程连起来：Pass 准备规则集合与范围，driver 选择 root 和候选规则，Pattern 完成局部改写，rewriter 把修改通知回 driver。Driver 再按照配置决定是否继续处理，并把收敛结果交还 Pass。
 
-接下来[实现并测试一个小 Pass](../tutorials/first_pass)把这些调用放入 `runOnOperation()`，补上注册、构建和正反例测试。优先掌握能够实现这一闭环的部分，其他驱动配置可在实验中按需回查。
+接下来[实现并测试一个小 Pass](../../tutorials/first_pass)把这些调用放入 `runOnOperation()`，补上注册、构建和正反例测试。优先掌握能够实现这一闭环的部分，其他驱动配置可在实验中按需回查。
 
 ## 依据与复现
 

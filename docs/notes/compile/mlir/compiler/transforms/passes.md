@@ -418,4 +418,4 @@ CSE/canonicalize 则尝试简化已有计算，并不承诺把它变成 CF 或 L
 
 维护脚本 `aicompiler-labs/llvm-mlir/docs/validate_passes.py` 从本页提取模块，核对 CSE/canonicalize 输出、嵌套选择、串行日志次序、配置及失败行为。默认结果保存到 `artifacts/logs/mlir-docs/<日期>-passes/manifest.json`。这些是本章讲解的验证证据，不是要求读者完成的另一组作业。
 
-下一章计划：[编译器机制目录](./)中的 **C++ IR API**，从一次 Value 替换和 Operation 删除开始，把本章的“修改 IR”展开成具体对象操作。
+下一章：[C++ IR API](./ir_api)，从一次 Value 替换和 Operation 删除开始，把本章的“修改 IR”展开成具体对象操作。

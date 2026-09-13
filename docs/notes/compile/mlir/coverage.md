@@ -8,9 +8,11 @@ updated: 2026-09-13
 
 本表约束后续章节的广度和深度。目标是支撑 AI Compiler 的阅读、开发、转换与优化工作，不以穷举所有上游 Dialect 和 API 为完成条件。新项目发现超出范围的机制时，先增补此表，再编写正文。
 
+机制模块入口为[IR 变换基础](./compiler/transforms/)与[定义 IR 抽象](./compiler/ir_definition/)。总览解释各章关系，下面各 ID 保留精确正文与范围，不因目录重组改变学习完成标准。
+
 ## 当前进度
 
-阶段 A 的基础阅读与最小 IR 实验已完成，当前处于阶段 B。[Pass 与 pipeline](./compiler/passes)已读完；[C++ IR API](./compiler/ir_api)核心问题已讨论，配套 `03-ir-api` 观察实验已提供。[PatternRewriter](./compiler/rewriting)已按单条规则的完整过程重写，主线与可理解性已获肯定；[改写驱动](./compiler/rewrite_drivers)保留多规则与驱动细节，两篇的独立 C++ 示例已验证；[小 Pass 贯通教程](./tutorials/first_pass)与 `04-small-pass` 工程已验证，待阅读与独立修改。原先 14 篇正文保留为基础知识与查阅入口。
+阶段 A 的基础阅读与最小 IR 实验已完成，阶段 B 原理与小 Pass 工程已完成理解，当前开始阶段 C 的操作定义。[Pass 与 pipeline](./compiler/transforms/passes)已读完；[C++ IR API](./compiler/transforms/ir_api)核心问题已讨论，配套 `03-ir-api` 观察实验已提供。[PatternRewriter](./compiler/transforms/rewriting)已按单条规则的完整过程重写，主线与可理解性已获肯定；[改写驱动](./compiler/transforms/rewrite_drivers)保留多规则与驱动细节，两篇的独立 C++ 示例已验证；[小 Pass 贯通教程](./tutorials/first_pass)与 `04-small-pass` 工程已验证，学习者已完成理解，独立修改尚待验证。[操作定义](./compiler/ir_definition/op_definition)及 `05-op-definition` 的 ODS/C++ 示例已验证，待阅读。原先 14 篇正文保留为基础知识与查阅入口。
 
 阶段完成按[学习路径](./learning_path)的基础目标判断，不把本表全部长期深度要求追加成同一阶段的关卡。C 调用演示已经由助手验证，完整 ABI、转换实现和所有权分析仍属于后续内容。
 
@@ -31,14 +33,16 @@ PatternRewriter 主章与改写驱动篇由 `validate_rewriting.py` 编译并核
 
 小 Pass 章由 `validate_small_pass.py` 核对正文与实际 C++ 工程、输入输出、重复应用和错误 pipeline 层级，并通过 lit/FileCheck 检查多 use、嵌套 Region、函数声明与合法未匹配输入。它提供编译器侧工程证据，不将作者已实现的示例记为学习者已独立完成。
 
+操作定义章使用 `lab-example` / `lab-invalid` 标记，由 `validate_op_definition.py` 用注册 Lab dialect 的工具单独验证；标准方言文档脚本不处理未知自定义操作。验证包括生成源码与正文对应、打印往返、builder 及自定义验证、展开输出与 lit 正反例，不作为目标机器码执行或学习者独立实现证据。
+
 ## 核心 IR
 
 | ID | 可检查知识项 | 前置 | 本次正文与位置 | 后续目标 / 尚未覆盖 |
 |---|---|---|---|---|
-| C01 | 文本、内存对象、bytecode 的对应；parser/printer；Context | — | [对象模型](./core/ir_model)，D2；P/G；[IR API](./compiler/ir_api)补 Context/Registry、拥有关系与解析程序 | D3：独立构造与解析；bytecode 版本机制见 X03 |
-| C02 | Operation 字段、Op 包装类、递归所有权；四种关系 | C01 | [对象模型](./core/ir_model)，D2；P/G；[IR API](./compiler/ir_api)补句柄、walk、插入、删除，C++ 已验证 | D3：独立实现；跨 Block/Region 移动的完整合法性仍待展开 |
+| C01 | 文本、内存对象、bytecode 的对应；parser/printer；Context | — | [对象模型](./core/ir_model)，D2；P/G；[IR API](./compiler/transforms/ir_api)补 Context/Registry、拥有关系与解析程序 | D3：独立构造与解析；bytecode 版本机制见 X03 |
+| C02 | Operation 字段、Op 包装类、递归所有权；四种关系 | C01 | [对象模型](./core/ir_model)，D2；P/G；[IR API](./compiler/transforms/ir_api)补句柄、walk、插入、删除，C++ 已验证 | D3：独立实现；跨 Block/Region 移动的完整合法性仍待展开 |
 | C03 | Region/Block/terminator；SSACFG 与 Graph；空 Region | C02 | [对象模型](./core/ir_model)，D2 | D3：RegionKindInterface 与克隆/内联边界 |
-| C04 | OpResult/BlockArgument；operand、use、user；多结果 | C02 | [SSA](./core/values_ssa)，D2；P/G；[IR API](./compiler/ir_api)补 use-list、RAUW、参数/结果映射克隆与反例 | D3：独立改写；多 Block/复杂 Region 映射仍待展开 |
+| C04 | OpResult/BlockArgument；operand、use、user；多结果 | C02 | [SSA](./core/values_ssa)，D2；P/G；[IR API](./compiler/transforms/ir_api)补 use-list、RAUW、参数/结果映射克隆与反例 | D3：独立改写；多 Block/复杂 Region 映射仍待展开 |
 | C05 | CFG 支配、合流、回边、层次支配与作用域 | C03—04 | [SSA](./core/values_ssa)，D2；P/N | D3：DominanceInfo 与修改 CFG 后的维护 |
 | C06 | 标量/容器/函数类型；动态 shape；index；类型相等与 cast | C04 | [类型与静态信息](./core/types_attributes)，D2；P/G | D3：类型构造、推导与数据布局查询 |
 | C07 | Attribute、inherent/discardable、Properties、别名、Location | C02、C06 | [类型与静态信息](./core/types_attributes)，D2；P/G | D3：自定义存储、ODS accessor、验证与打印 |
@@ -74,12 +78,12 @@ PatternRewriter 主章与改写驱动篇由 `validate_rewriting.py` 编译并核
 
 | ID | 可检查知识项 | 前置 | 本次正文与位置 | 后续目标 / 所需产物 |
 |---|---|---|---|---|
-| M01 | Context/Registry、Builder、InsertionPoint、walk、IRMapping、替换/删除 | C01—05 | [C++ IR API](./compiler/ir_api)已展开；单 Block 函数构造、改写、克隆的 C++ 实例已编译运行，含 N | D3：学习者独立实现；复杂 CFG/Region 修改及 driver 协议后续展开 |
-| M02 | ODS、TableGen、Op/Type/Attr、builders、parser/printer、verifier | C02、C06—07、M01 | 未展开 | D3：小 Dialect，正反例与往返测试 |
-| M03 | Trait、Op/Type/Attr Interface、外部模型、推导与效果接口 | C08—11、M02 | 未展开 | D3：供通用变换调用的接口实现 |
-| M04 | fold、canonicalization、RewritePattern、benefit、driver、收敛、PDL/PDLL | M01、C11 | [PatternRewriter](./compiler/rewriting)展开匹配、替换、调用与修改通知；[改写驱动](./compiler/rewrite_drivers)展开原地更新、Walk/Greedy、benefit、fold 与收敛；C++ 规则和对照已验证，PDL/PDLL 仅定位 | D3：学习者独立实现；Op fold/canonicalization 注册随 M02 展开；D4：复杂规则交互；声明式规则专题待展开 |
+| M01 | Context/Registry、Builder、InsertionPoint、walk、IRMapping、替换/删除 | C01—05 | [C++ IR API](./compiler/transforms/ir_api)已展开；单 Block 函数构造、改写、克隆的 C++ 实例已编译运行，含 N | D3：学习者独立实现；复杂 CFG/Region 修改及 driver 协议后续展开 |
+| M02 | ODS、TableGen、Op/Type/Attr、builders、parser/printer、verifier | C02、C06—07、M01 | [操作定义](./compiler/ir_definition/op_definition)展开标量 Op、ODS 生成 API、属性存储、builder、assembly format、注册与生成/手写验证；C++ 工程及正反例已验证 | D3：学习者独立定义；自定义 Type/Attr、复杂 Region/可变参数、自定义 parser/printer 待展开 |
+| M03 | Trait、Op/Type/Attr Interface、外部模型、推导与效果接口 | C08—11、M02 | [操作定义](./compiler/ir_definition/op_definition)使用 Pure 并说明语义依据；接口定义与通用消费者待展开 | D3：供通用变换调用的接口实现 |
+| M04 | fold、canonicalization、RewritePattern、benefit、driver、收敛、PDL/PDLL | M01、C11 | [PatternRewriter](./compiler/transforms/rewriting)展开匹配、替换、调用与修改通知；[改写驱动](./compiler/transforms/rewrite_drivers)展开原地更新、Walk/Greedy、benefit、fold 与收敛；C++ 规则和对照已验证，PDL/PDLL 仅定位 | D3：学习者独立实现；Op fold/canonicalization 注册随 M02 展开；D4：复杂规则交互；声明式规则专题待展开 |
 | M05 | Dialect Conversion、ConversionTarget、动态合法性、TypeConverter、materialization | M02—04 | 未展开 | D3：1:N 类型变化、region/call 边界、partial/full conversion |
-| M06 | Pass/OpPassManager、嵌套 pipeline、注册、选项、失败与线程约束 | D2：C02、C08；D3：M01 | [Pass 与 pipeline](./compiler/passes)，运行模型 D2；[小 Pass 教程](./tutorials/first_pass)展开函数 Pass、注册、工具集成及失败处理，C++ 工程已验证 | D3：独立 Pass 和 lit/FileCheck 测试 |
+| M06 | Pass/OpPassManager、嵌套 pipeline、注册、选项、失败与线程约束 | D2：C02、C08；D3：M01 | [Pass 与 pipeline](./compiler/transforms/passes)，运行模型 D2；[小 Pass 教程](./tutorials/first_pass)展开函数 Pass、注册、工具集成及失败处理，C++ 工程已验证 | D3：独立 Pass 和 lit/FileCheck 测试 |
 | M07 | LLVM dialect lowering、ABI、descriptor、translation、JIT/AOT/runtime | D11、D17、M05 | 未展开 | D3：完整 CPU 可执行链；与设备后端边界分开验证 |
 | M08 | DPS、One-Shot Bufferize、读写冲突、in-place/out-of-place、未知 Op | D10—12、M03 | 未展开 | D3—4：解释额外拷贝与 alias 分析结论 |
 | M09 | buffer deallocation、ownership、逃逸与跨函数边界 | M08、C09 | 未展开 | D3：分配/释放与返回 buffer 的生命周期验证 |
@@ -102,8 +106,8 @@ PatternRewriter 主章与改写驱动篇由 `validate_rewriting.py` 编译并核
 
 | ID | 可检查知识项 | 前置 | 本次正文与位置 | 后续目标 / 缺口 |
 |---|---|---|---|---|
-| X01 | mlir-opt、generic print、诊断、verifier、pipeline、IR dump | C01—11 | [阅读与验证](./guides/inspecting_ir) + [Pass 与 pipeline](./compiler/passes)，D2；新增真实 pipeline 输出、嵌套选择与失败检查 | D3：崩溃复现、pass instrumentation 与调试器 |
-| X02 | lit/FileCheck、verify-diagnostics、单测、语义/数值/性能验证 | X01、M04 | 指南解释证据分级；[小 Pass 教程](./tutorials/first_pass)展开 lit/FileCheck 与正反例，工程已验证；verify-diagnostics/单测框架后续展开 | D3—4：具有反例和边界的回归测试 |
+| X01 | mlir-opt、generic print、诊断、verifier、pipeline、IR dump | C01—11 | [阅读与验证](./guides/inspecting_ir) + [Pass 与 pipeline](./compiler/transforms/passes)，D2；新增真实 pipeline 输出、嵌套选择与失败检查 | D3：崩溃复现、pass instrumentation 与调试器 |
+| X02 | lit/FileCheck、verify-diagnostics、单测、语义/数值/性能验证 | X01、M04 | 指南解释证据分级；[小 Pass 教程](./tutorials/first_pass)展开 lit/FileCheck 与正反例，工程已验证；[操作定义](./compiler/ir_definition/op_definition)补充 verify-diagnostics 与分割错误用例；单测框架后续展开 | D3—4：具有反例和边界的回归测试 |
 | X03 | bytecode、版本升级、Dialect version、序列化兼容 | C01、M02 | 对象章仅定位 | D2—3：选择实际版本兼容案例 |
 | X04 | C API、Python bindings、所有权/生命周期、调试打印 | M01 | 未展开 | D2—3：与实际工具脚本集成 |
 | X05 | mlir-reduce、最小复现、统计/timing、LSP 与诊断定位 | X01 | 未展开 | D3：可复现错误与性能定位 |

@@ -10,18 +10,18 @@ updated: 2026-09-13
 
 ## 当前从哪里继续
 
-**阶段 A“认识基础 IR + 最小 IR 实验”已完成，当前进入阶段 B。** 已完成基础正文阅读，并独立编写 `sum_positive.mlir`：结构、类型和两个循环状态的传递经审阅与 verifier 检查通过。计数保留 i32 是当前练习的合法选择。
+**阶段 A“认识基础 IR + 最小 IR 实验”已完成；阶段 B 的原理与小 Pass 工程已完成理解，当前进入阶段 C 的操作定义。** 已完成基础正文阅读，并独立编写 `sum_positive.mlir`：结构、类型和两个循环状态的传递经审阅与 verifier 检查通过。计数保留 i32 是当前练习的合法选择。
 
 工作区还提供了验证、SCF→CF 和 C 调用示例，助手已验证五组 CPU 输入。它们帮助连接观察与执行，不把完整 ABI/lowering、全部错误构造或所有基础专题的深入掌握追加为阶段 A 关卡。
 
-已读完[Pass 与 pipeline：组织一次 IR 变换](./compiler/passes)，并讨论了 [C++ IR API](./compiler/ir_api) 的核心对象修改问题，重写后的 [PatternRewriter：把一次 IR 修改写成可应用的规则](./compiler/rewriting)已获得“主线更清楚、更易理解”的反馈，现在继续[实现并测试一个小 Pass](./tutorials/first_pass)。无需先背完 API；配套程序由编写者完成编译和验证，不据此将学习者的独立 C++ 实现能力标为完成。阶段 B 按以下顺序展开：
+已读完[Pass 与 pipeline：组织一次 IR 变换](./compiler/transforms/passes)，并讨论了 [C++ IR API](./compiler/transforms/ir_api) 的核心对象修改问题，重写后的 [PatternRewriter：把一次 IR 修改写成可应用的规则](./compiler/transforms/rewriting)已获得“主线更清楚、更易理解”的反馈，[实现并测试一个小 Pass](./tutorials/first_pass)也已完成理解。现在继续[一个操作是怎样被定义出来的](./compiler/ir_definition/op_definition)。无需先背完 API；配套程序由编写者完成编译和验证，不据此将学习者的独立 C++ 实现能力标为完成。串联这几章时先读[IR 变换基础总览](./compiler/transforms/)，再按需回查各章。阶段 B 的已学内容如下：
 
 | 顺序 | 章节 | 当前状态 | 本节要建立的能力 |
 |---|---|---|---|
-| B1 | [Pass 与 pipeline](./compiler/passes) | 已读完；正文示例已验证 | 理解一次运行、处理顺序、嵌套范围、日志和失败 |
-| B2 | [C++ IR API](./compiler/ir_api) | 核心问题已讨论，按需巩固；观察实验已提供 | 对象生命周期、use-list、遍历、插入、替换/删除、构造与映射克隆 |
-| B3 | [PatternRewriter](./compiler/rewriting)；配套[改写驱动](./compiler/rewrite_drivers) | 主章写法已获肯定；两篇示例已验证，深入驱动内容按需回查 | 先走通单条规则的匹配、替换、调用与通知，再按需深入规则协作和收敛 |
-| B4 | [实现并测试一个小 Pass](./tutorials/first_pass) | 正文与 `04-small-pass` 工程已验证；待阅读与独立修改 | 组合前述机制，完成构建、注册与 lit/FileCheck 正反例测试 |
+| B1 | [Pass 与 pipeline](./compiler/transforms/passes) | 已读完；正文示例已验证 | 理解一次运行、处理顺序、嵌套范围、日志和失败 |
+| B2 | [C++ IR API](./compiler/transforms/ir_api) | 核心问题已讨论，按需巩固；观察实验已提供 | 对象生命周期、use-list、遍历、插入、替换/删除、构造与映射克隆 |
+| B3 | [PatternRewriter](./compiler/transforms/rewriting)；配套[改写驱动](./compiler/transforms/rewrite_drivers) | 主章写法已获肯定；两篇示例已验证，深入驱动内容按需回查 | 先走通单条规则的匹配、替换、调用与通知，再按需深入规则协作和收敛 |
+| B4 | [实现并测试一个小 Pass](./tutorials/first_pass) | 已完成理解；作者工程已验证，学习者独立修改尚无提交证据 | 组合前述机制，完成构建、注册与 lit/FileCheck 正反例测试 |
 
 每一部分继续采用“先读原理、讨论，再做相应实践”的节奏。B1 不要求先能写完整 C++ Pass。
 
@@ -30,6 +30,20 @@ B2 的观察入口为 `aicompiler-labs/llvm-mlir/03-ir-api/`：先预测 RAUW/er
 这里的 A—E 是 MLIR 内部的学习阶段，与总路线中的阶段编号不是一一对应。总路线“统一 IR 与 Pass 基础”还包含操作定义、转换、分析与内存等内容，分布在后面的多个模块中；读完 B1 足以继续学习 IR 修改机制，但并不表示总路线的基础范围已经全部完成。
 
 已有传统编译器背景时，CSE、DCE 等熟悉规则可以快速回顾，把精力放在 MLIR 的对象与生命周期、Region 约束、改写协议、legality / TypeConverter、Interface 和内存语义上。常用传统优化及它们依赖的分析可查阅[Dataflow Analysis 与 Pass Pipeline](../traditional/dataflow_pass)；后续的深度通过推导合法性、实现并验证代表性变换建立，不通过增加更多名词或重复简单规则建立。
+
+## 阶段 C：从操作定义继续
+
+[定义 IR 抽象](./compiler/ir_definition/)说明本模块的内部关系，当前从操作定义展开，再连接接口和转换。
+
+| 顺序 | 内容 | 当前状态 | 本次理解目标 |
+|---|---|---|---|
+| C1 | [一个操作是怎样被定义出来的](./compiler/ir_definition/op_definition) | 正文、ODS/C++ 工程与正反例已验证，待阅读 | 语义约定 → ODS → 生成 API → verifier → 注册与打印 → Pass 消费 |
+| C2 | Trait / Interface 与通用变换 | 待展开；C1 仅使用 Pure 并说明语义依据 | 操作怎样向通用基础设施提供可查询的能力与约束 |
+| C3 | Dialect Conversion | 待展开；C1 的展开仍是普通 Pattern | legality、类型转换与边界衔接 |
+
+C1 的观察入口为 `aicompiler-labs/llvm-mlir/05-op-definition/`。先读原理，再比较自定义/通用打印、builder 构造与验证结果；自定义 Type/Attr 和复杂操作结构随后续范围逐步展开。
+
+已理解 `0+x` 的扩展思路，可以继续学习操作定义；独立改动和测试的证据后续补交即可，不以作者生成工程代替个人实践完成。
 
 ## 阶段 A 内容索引（按需回顾）
 
@@ -69,8 +83,8 @@ B2 的观察入口为 `aicompiler-labs/llvm-mlir/03-ir-api/`：先预测 RAUW/er
 | 阶段 | 核心工作 | 开始前需具备 | 完成证据；之后再具体编写实验 |
 |---|---|---|---|
 | A：阅读 IR（基础目标已完成） | 基础概念与最小 IR | 基本程序阅读能力 | 基础阅读 + 独立编写并解释一个合法小程序 |
-| B：使用与实现变换（当前） | pipeline、IR API、fold、PatternRewriter、Pass、lit/FileCheck | A；实现部分按需补 C++ | 一个有正反例测试的小变换，解释匹配条件与保持的不变量 |
-| C：定义与转换抽象 | ODS、Type/Attr、Trait/Interface、verifier、Dialect Conversion | A；B 的构造/改写能力 | 小 Dialect 与带类型变化的 conversion；展示不合法输入和转换失败 |
+| B：使用与实现变换（原理已理解） | pipeline、IR API、fold、PatternRewriter、Pass、lit/FileCheck | A；实现部分按需补 C++ | 一个有正反例测试的小变换，解释匹配条件与保持的不变量 |
+| C：定义与转换抽象（当前） | ODS、Type/Attr、Trait/Interface、verifier、Dialect Conversion | A；B 的构造/改写能力 | 小 Dialect 与带类型变化的 conversion；展示不合法输入和转换失败 |
 | D：张量与内存 | tensor/memref/linalg、DPS、bufferization、释放、LLVM lowering | B—C 的使用能力 | 一条可运行的 CPU lowering 链，验证形状、别名、生命周期和数值 |
 | E：优化与目标后端 | 分析、tiling/fusion/vector、Transform、GPU/NPU 表示与目标项目 | D；所选目标的硬件基础 | 带语义约束、边界测试与性能解释的优化案例 |
 
