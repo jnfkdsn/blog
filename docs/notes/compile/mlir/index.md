@@ -1,7 +1,7 @@
 ---
 order: 2
 title: MLIR 技术文档
-updated: 2026-09-06
+updated: 2026-09-13
 excludeFromSidebar: true
 tags: [mlir, compiler, learning]
 status: draft
@@ -29,20 +29,25 @@ status: draft
 
 ## 当前阶段已展开
 
-当前阶段是“读懂并解释 IR”。正文覆盖：
+阶段 A“认识基础 IR + 最小实验”的基础目标已完成。当前处于阶段 B，[Pass 与 pipeline](./compiler/passes)已读完，[C++ IR API](./compiler/ir_api)的核心问题已讨论并提供观察实验；[PatternRewriter](./compiler/rewriting)重写后的主线已获肯定，配套[改写驱动](./compiler/rewrite_drivers)供深入学习。现在继续[实现并测试一个小 Pass](./tutorials/first_pass)：正文与工程已验证，独立修改任务尚待完成。
+
+目前已有正文覆盖：
 
 - 核心概念：对象模型与表示、Value/SSA/支配、Type/Attribute/Properties、符号与作用域、内存效果与推测执行边界。
 - 基础方言：builtin、func、arith、cf，以及 SCF 的 if、for、while 和区域传值协议。
 - 贯通教程：从一个“带条件的循环累加”算法出发，连接结构、数据流、控制流与 SCF-to-CF。
 - 使用指南：自定义/通用打印、parser/verifier、IR 变换、源码定位与证据分级。
+- 编译器机制：Pass 的运行对象、CSE/canonicalize、pipeline 顺序与嵌套、日志、分析有效性、失败及对应源码路径。
+- IR 修改机制：C++ 对象与生命周期、use-list、RAUW、Builder/插入点、删除与遍历、函数构造及 IRMapping 克隆，配套独立 C++ 程序与失败反例。
+- Pattern 改写机制：规则与 driver 分工、修改通知、原地更新、worklist、Walk/Greedy 行为对照、benefit、fold/canonicalize 与收敛边界，配套真实 IR 和规则成功轨迹。
 
 Tensor 与 MemRef 在当前阶段先解释值语义、可变存储和别名的区别；完整操作族、布局、DPS、bufferization 在后续阶段展开。当前章节的具体边界都列在[覆盖表](./coverage)中。
 
 ## 广度与深度怎样维护
 
-每个模块先确定范围与前置知识，再列可检查的知识项。章节至少解释对象或操作契约、语义规则、完整例子、边界/反例、设计原因、源码入口和理解检查。只列术语或 API 名称不算展开。
+覆盖表用于检查内容是否遗漏；正文按理解过程组织，不机械地逐项列术语。后续章节以一个持续演进的例子连接现象、原理和实现，关键结论展开推导及中间状态，源码围绕具体论点解释。版本和复现日志集中放在文末或实验目录，减少阅读中断。
 
-“深入”也有阶段差异：当前需要能独立推演合法性和执行过程；实现阶段还要追到 ODS、C++ verifier、rewrite 与测试；优化阶段还要给出语义正确性和性能证据。首次读 IR 不以完整阅读 MLIR 源码为完成条件。
+“深入”随阶段递进：基础阶段认识并解释小程序；当前先建立 Pass 的运行模型，随后进入 C++ 对象修改与实现测试；再往后追踪转换、分析和优化的正确性与性能。扩展专题不自动成为上一阶段新增的完成门槛。
 
 模块 `index.md` 负责定位和导航。机制正文承载完整解释；贯通教程承载跨章节推演。正式实践在阅读和讨论之后安排到 workspace 的 `aicompiler-labs/llvm-mlir/`，生成物进入 `artifacts/`。
 
