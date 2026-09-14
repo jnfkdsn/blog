@@ -1,7 +1,7 @@
 ---
 order: 1
 title: 一个操作是怎样被定义出来的：ODS、C++ 与验证
-updated: 2026-09-13
+updated: 2026-09-14
 ---
 
 # 一个操作是怎样被定义出来的：ODS、C++ 与验证
@@ -367,7 +367,7 @@ module {
 
 </details>
 
-下一部分沿这个操作继续学习 Trait / Interface：例如通用优化怎样通过效果接口知道一个新操作能否删除，类型/形状推导怎样向调用者提供结果信息。随后再进入 Dialect Conversion。自定义 Type/Attr、复杂 Region、可变数量 operands 等范围继续保留在覆盖表中，随需要逐步展开。
+下一章沿这个操作继续学习 [Trait / Interface](./traits_interfaces)：通用优化怎样通过效果接口判断删除条件，范围消费者怎样查询不同操作。再读[自定义 Type / Attribute](./types_attributes)与[带 Region 的操作](./regions_assembly)，把领域数据和区域协议补齐，再读[解析与打印](./assembly_format)，随后进入 Dialect Conversion。整个章节组的关系见[模块总览](./)。
 
 ## 实现与验证入口
 

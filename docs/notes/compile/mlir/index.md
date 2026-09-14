@@ -1,7 +1,7 @@
 ---
 order: 2
 title: MLIR 技术文档
-updated: 2026-09-13
+updated: 2026-09-14
 excludeFromSidebar: true
 tags: [mlir, compiler, learning]
 status: draft
@@ -29,7 +29,7 @@ status: draft
 
 ## 当前阶段已展开
 
-阶段 A“认识基础 IR + 最小实验”的基础目标已完成。阶段 B 原理与小 Pass 工程已完成理解，[Pass 与 pipeline](./compiler/transforms/passes)已读完，[C++ IR API](./compiler/transforms/ir_api)的核心问题已讨论并提供观察实验；[PatternRewriter](./compiler/transforms/rewriting)重写后的主线已获肯定，配套[改写驱动](./compiler/transforms/rewrite_drivers)供深入学习。[小 Pass 教程](./tutorials/first_pass)的独立修改尚待验证。现在进入[操作定义](./compiler/ir_definition/op_definition)，配套 ODS/C++、builder、verifier 与打印/展开示例已验证，待阅读。
+阶段 A“认识基础 IR + 最小实验”的基础目标已完成。阶段 B 原理与小 Pass 工程已完成理解，[Pass 与 pipeline](./compiler/transforms/passes)已读完，[C++ IR API](./compiler/transforms/ir_api)的核心问题已讨论并提供观察实验；[PatternRewriter](./compiler/transforms/rewriting)重写后的主线已获肯定，配套[改写驱动](./compiler/transforms/rewrite_drivers)供深入学习。[小 Pass 教程](./tutorials/first_pass)的独立修改尚待验证。[操作定义](./compiler/ir_definition/op_definition)也已完成阅读；[定义 IR 抽象模块](./compiler/ir_definition/)已补齐接口、类型/属性、区域操作与解析打印四章，正文与配套示例已验证，接下来按学习路径阅读。
 
 目前已有正文覆盖：
 
@@ -39,7 +39,7 @@ status: draft
 - 使用指南：自定义/通用打印、parser/verifier、IR 变换、源码定位与证据分级。
 - 编译器机制：Pass 的运行对象、CSE/canonicalize、pipeline 顺序与嵌套、日志、分析有效性、失败及对应源码路径。
 - IR 修改机制：C++ 对象与生命周期、use-list、RAUW、Builder/插入点、删除与遍历、函数构造及 IRMapping 克隆，配套独立 C++ 程序与失败反例。
-- 操作定义：以 `lab.clamp` 连接 ODS、生成的 C++ API、静态属性、builder、生成/手写 verifier、注册、打印往返及 Pass 展开。
+- 定义 IR 抽象：以 `lab.clamp` 连接 ODS、生成 API、builder、verifier、注册与 Pass 展开；随后用区间信息串起 Trait/Interface、自定义 Type/Attr、uniquing、Region 传值、单组可变参数、分阶段验证和手写解析打印。
 - Pattern 改写机制：规则与 driver 分工、修改通知、原地更新、worklist、Walk/Greedy 行为对照、benefit、fold/canonicalize 与收敛边界，配套真实 IR 和规则成功轨迹。
 
 Tensor 与 MemRef 在当前阶段先解释值语义、可变存储和别名的区别；完整操作族、布局、DPS、bufferization 在后续阶段展开。当前章节的具体边界都列在[覆盖表](./coverage)中。

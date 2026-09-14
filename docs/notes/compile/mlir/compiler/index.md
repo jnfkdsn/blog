@@ -1,7 +1,7 @@
 ---
 order: 30
 title: 编译器机制
-updated: 2026-09-13
+updated: 2026-09-14
 excludeFromSidebar: true
 ---
 
@@ -14,7 +14,7 @@ excludeFromSidebar: true
 | 模块 | 需要理解的过程 | 当前内容 |
 |---|---|---|
 | [IR 变换基础](./transforms/) | 一次局部修改怎样进入 pipeline，被应用并形成可检查结果 | Pass、C++ IR API、PatternRewriter、改写驱动；链接小 Pass 贯通教程 |
-| [定义 IR 抽象](./ir_definition/) | 一项计算怎样成为工具能读取、构造、验证和处理的操作 | ODS 与操作定义；Trait / Interface 等后续展开 |
+| [定义 IR 抽象](./ir_definition/) | 一项计算怎样成为工具能读取、构造、验证和处理的操作 | ODS 与操作定义、Trait / Interface、自定义 Type / Attr、Region / 可变参数及解析验证 |
 
 读过 Pass 系列后，可以先用[变换基础总览](./transforms/)把各章放回同一条调用链，再进入[操作定义](./ir_definition/op_definition)。具体学习状态与阶段标准见[学习路径](../learning_path)。
 
