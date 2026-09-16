@@ -8,6 +8,8 @@ status: draft
 
 # CMake 构建实践
 
+本篇聚焦 CUDA / Python 扩展。编译链接、target 依赖、通用 CMake 和 CPU 调试基础见 [C++ 编译、链接与调试](/notes/cpp/build_debug)。
+
 ## python 调用 cuda 算子
 
 一个最小的 Python CUDA 扩展通常会拆成三层：
@@ -76,4 +78,3 @@ cmake --build build -j
 ```
 
 如果是 Python 包，可以在 `setup.py` 或 `pyproject.toml` 里调用 CMake。早期阶段先手动 CMake 跑通，比一上来塞进打包流程更容易定位问题。
-

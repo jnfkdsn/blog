@@ -8,7 +8,7 @@ order: 0
 
 ## 推荐路径
 
-1. [C++ 前置知识](/notes/cuda/cpp)
+1. [CUDA 所需的 C++ 前置知识](/notes/cuda/cpp)（通用基础见 [C++ 工程基础](/notes/cpp/)）
 2. [CMake 构建实践](/notes/cuda/cmake)
 3. [CUDA 基础语法](/notes/cuda/cuda_basic_syntax)
 4. [Roofline 分析](/notes/cuda/roofline)
