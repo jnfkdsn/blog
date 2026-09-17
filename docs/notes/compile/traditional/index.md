@@ -1,7 +1,7 @@
 ---
 order: 0
 title: 传统编译器
-updated: 2026-09-08
+updated: 2026-09-15
 tags: [compiler, ir, ssa, optimization]
 status: draft
 ---

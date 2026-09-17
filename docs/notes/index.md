@@ -13,6 +13,7 @@ order: 0
 
 ## 领域笔记
 
+- [C++ 工程基础](/notes/cpp/)：对象生命周期、所有权、STL、模板、构建调试、多线程与内存模型。
 - [CUDA 学习笔记](/notes/cuda/)：线程模型、内存层次、同步、构建系统和性能分析。
 - [Triton 学习笔记](/notes/triton/)：Triton 编程模型、softmax、GEMM、autotune。
 - [编译器学习笔记](/notes/compile/)：传统编译器基础、IR/SSA、优化 pass、后端和 AI Compiler 衔接。
