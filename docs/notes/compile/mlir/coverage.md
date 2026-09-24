@@ -1,7 +1,7 @@
 ---
 order: 2
 title: 计划覆盖范围与缺口
-updated: 2026-09-14
+updated: 2026-09-24
 ---
 
 # 计划覆盖范围与缺口
@@ -12,7 +12,7 @@ updated: 2026-09-14
 
 ## 当前进度
 
-阶段 A 的基础阅读与最小 IR 实验已完成，阶段 B 原理与小 Pass 工程已完成理解，阶段 C 的操作定义也已完成阅读，当前继续接口、类型/属性和区域定义。[Pass 与 pipeline](./compiler/transforms/passes)已读完；[C++ IR API](./compiler/transforms/ir_api)核心问题已讨论，配套 `03-ir-api` 观察实验已提供。[PatternRewriter](./compiler/transforms/rewriting)已按单条规则的完整过程重写，主线与可理解性已获肯定；[改写驱动](./compiler/transforms/rewrite_drivers)保留多规则与驱动细节，两篇的独立 C++ 示例已验证；[小 Pass 贯通教程](./tutorials/first_pass)与 `04-small-pass` 工程已验证，学习者已完成理解，独立修改尚待验证。[操作定义](./compiler/ir_definition/op_definition)及 `05-op-definition` 的 ODS/C++ 示例已验证，学习者已完成阅读。[定义 IR 抽象](./compiler/ir_definition/)接口、类型/属性、Region 与解析打印四章核心正文及 `06-ir-definition` 工程，已验证、待阅读。原先 14 篇正文保留为基础知识与查阅入口。
+阶段 A 的基础阅读与最小 IR 实验已完成，阶段 B 原理与小 Pass 工程已完成理解，阶段 C 的 IR 定义五章已完成阅读，当前通过 my.add 增量工程建立统一模型。[Pass 与 pipeline](./compiler/transforms/passes)已读完；[C++ IR API](./compiler/transforms/ir_api)核心问题已讨论，配套 `03-ir-api` 观察实验已提供。[PatternRewriter](./compiler/transforms/rewriting)已按单条规则的完整过程重写，主线与可理解性已获肯定；[改写驱动](./compiler/transforms/rewrite_drivers)保留多规则与驱动细节，两篇的独立 C++ 示例已验证；[小 Pass 贯通教程](./tutorials/first_pass)与 `04-small-pass` 工程已验证，学习者已完成理解，独立修改尚待验证。[操作定义](./compiler/ir_definition/op_definition)及 `05-op-definition` 的 ODS/C++ 示例已验证，学习者已完成阅读。[定义 IR 抽象](./compiler/ir_definition/)接口、类型/属性、Region 与解析打印四章核心正文及 `06-ir-definition` 工程，已验证、已阅读，工程联系仍需巩固。原先 14 篇正文保留为基础知识与查阅入口。
 
 阶段完成按[学习路径](./learning_path)的基础目标判断，不把本表全部长期深度要求追加成同一阶段的关卡。C 调用演示已经由助手验证，完整 ABI、转换实现和所有权分析仍属于后续内容。
 
@@ -36,6 +36,8 @@ PatternRewriter 主章与改写驱动篇由 `validate_rewriting.py` 编译并核
 操作定义章使用 `lab-example` / `lab-invalid` 标记，由 `validate_op_definition.py` 用注册 Lab dialect 的工具单独验证；标准方言文档脚本不处理未知自定义操作。验证包括生成源码与正文对应、打印往返、builder 及自定义验证、展开输出与 lit 正反例，不作为目标机器码执行或学习者独立实现证据。
 
 定义 IR 抽象后四章使用 `irdef-example` / `irdef-invalid` 标记，由 `validate_ir_definition.py` 核对正文、生成源码和 15 组预期诊断，并检查外部模型有无、通用死代码删除、类型身份与 checked 构造、区域与文本往返。这里的 D3 作者工程证据不包含范围比较优化、RegionBranch 实现或自定义操作的目标执行。
+
+[my.add 第一篇贯通教程](./tutorials/my_dialect/01_minimal_dialect)补充 M02 的构建与运行链证据。`validate_my_dialect.py` 检查正文与源码、生成访问器、打印往返、约束诊断及改名任务的预期效果。当前只实现最小定义与读写；学习者修改尚待完成，后续 Pattern/Conversion 不记为已实现。
 
 ## 核心 IR
 

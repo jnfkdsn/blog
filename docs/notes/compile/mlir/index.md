@@ -1,7 +1,7 @@
 ---
 order: 2
 title: MLIR 技术文档
-updated: 2026-09-14
+updated: 2026-09-24
 excludeFromSidebar: true
 tags: [mlir, compiler, learning]
 status: draft
@@ -29,7 +29,7 @@ status: draft
 
 ## 当前阶段已展开
 
-阶段 A“认识基础 IR + 最小实验”的基础目标已完成。阶段 B 原理与小 Pass 工程已完成理解，[Pass 与 pipeline](./compiler/transforms/passes)已读完，[C++ IR API](./compiler/transforms/ir_api)的核心问题已讨论并提供观察实验；[PatternRewriter](./compiler/transforms/rewriting)重写后的主线已获肯定，配套[改写驱动](./compiler/transforms/rewrite_drivers)供深入学习。[小 Pass 教程](./tutorials/first_pass)的独立修改尚待验证。[操作定义](./compiler/ir_definition/op_definition)也已完成阅读；[定义 IR 抽象模块](./compiler/ir_definition/)已补齐接口、类型/属性、区域操作与解析打印四章，正文与配套示例已验证，接下来按学习路径阅读。
+阶段 A“认识基础 IR + 最小实验”的基础目标已完成。阶段 B 原理与小 Pass 工程已完成理解，[Pass 与 pipeline](./compiler/transforms/passes)已读完，[C++ IR API](./compiler/transforms/ir_api)的核心问题已讨论并提供观察实验；[PatternRewriter](./compiler/transforms/rewriting)重写后的主线已获肯定，配套[改写驱动](./compiler/transforms/rewrite_drivers)供深入学习。[小 Pass 教程](./tutorials/first_pass)的独立修改尚待验证。[定义 IR 抽象模块](./compiler/ir_definition/)五章均已阅读。当前改用 [my.add 增量工程](./tutorials/my_dialect/)串联生成与运行过程，第一阶段参考工程和字段改名任务已提供，学习者任务待完成。
 
 目前已有正文覆盖：
 

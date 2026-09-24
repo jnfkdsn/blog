@@ -1,7 +1,7 @@
 ---
 order: 1
 title: 学习路径与阶段标准
-updated: 2026-09-14
+updated: 2026-09-24
 ---
 
 # 学习路径与阶段标准
@@ -10,11 +10,11 @@ updated: 2026-09-14
 
 ## 当前从哪里继续
 
-**阶段 A“认识基础 IR + 最小 IR 实验”已完成；阶段 B 的原理与小 Pass 工程已完成理解，阶段 C 的操作定义已完成阅读，接着学习接口、类型/属性和区域操作。** 已完成基础正文阅读，并独立编写 `sum_positive.mlir`：结构、类型和两个循环状态的传递经审阅与 verifier 检查通过。计数保留 i32 是当前练习的合法选择。
+**阶段 A“认识基础 IR + 最小 IR 实验”已完成；阶段 B 的原理与小 Pass 工程已完成理解，阶段 C 的 IR 定义五章已读完，但各机制的工程联系仍需建立。当前转入 [my.add 增量工程](./tutorials/my_dialect/)，先走通最小定义、生成、注册和读写过程。** 已完成基础正文阅读，并独立编写 `sum_positive.mlir`：结构、类型和两个循环状态的传递经审阅与 verifier 检查通过。计数保留 i32 是当前练习的合法选择。
 
 工作区还提供了验证、SCF→CF 和 C 调用示例，助手已验证五组 CPU 输入。它们帮助连接观察与执行，不把完整 ABI/lowering、全部错误构造或所有基础专题的深入掌握追加为阶段 A 关卡。
 
-已读完[Pass 与 pipeline：组织一次 IR 变换](./compiler/transforms/passes)，并讨论了 [C++ IR API](./compiler/transforms/ir_api) 的核心对象修改问题，重写后的 [PatternRewriter：把一次 IR 修改写成可应用的规则](./compiler/transforms/rewriting)已获得“主线更清楚、更易理解”的反馈，[实现并测试一个小 Pass](./tutorials/first_pass)也已完成理解。[一个操作是怎样被定义出来的](./compiler/ir_definition/op_definition)也已完成学习，现在继续[Traits / Interfaces](./compiler/ir_definition/traits_interfaces)。无需先背完 API；配套程序由编写者完成编译和验证，不据此将学习者的独立 C++ 实现能力标为完成。串联这几章时先读[IR 变换基础总览](./compiler/transforms/)，再按需回查各章。阶段 B 的已学内容如下：
+已读完[Pass 与 pipeline：组织一次 IR 变换](./compiler/transforms/passes)，并讨论了 [C++ IR API](./compiler/transforms/ir_api) 的核心对象修改问题，重写后的 [PatternRewriter：把一次 IR 修改写成可应用的规则](./compiler/transforms/rewriting)已获得“主线更清楚、更易理解”的反馈，[实现并测试一个小 Pass](./tutorials/first_pass)也已完成理解。[一个操作是怎样被定义出来的](./compiler/ir_definition/op_definition)也已完成学习，IR 定义其余章节也已读完；接下来通过完整的小工程巩固，原章节按需查阅。无需先背完 API；配套程序由编写者完成编译和验证，不据此将学习者的独立 C++ 实现能力标为完成。串联这几章时先读[IR 变换基础总览](./compiler/transforms/)，再按需回查各章。阶段 B 的已学内容如下：
 
 | 顺序 | 章节 | 当前状态 | 本节要建立的能力 |
 |---|---|---|---|
@@ -33,16 +33,16 @@ B2 的观察入口为 `aicompiler-labs/llvm-mlir/03-ir-api/`：先预测 RAUW/er
 
 ## 阶段 C：从操作定义继续
 
-[定义 IR 抽象](./compiler/ir_definition/)说明本模块的内部关系，现已备齐本模块五章核心正文。按下表逐章阅读，之后再连接转换；无需一次消化所有内容。
+[定义 IR 抽象](./compiler/ir_definition/)说明本模块的内部关系，现已备齐本模块五章核心正文。这五章已阅读，但读者反馈概念互相引用、缺少完整工程链。当前不要求重读整组，先跟随 [01：让自己的工具认识 my.add](./tutorials/my_dialect/01_minimal_dialect) 建立统一模型：观察参考工程，再独立完成字段改名任务；后续接入 Pattern/Pass，再逐步增加机制。
 
 | 顺序 | 内容 | 当前状态 | 本次理解目标 |
 |---|---|---|---|
 | C1 | [一个操作是怎样被定义出来的](./compiler/ir_definition/op_definition) | 已完成阅读；作者 ODS/C++ 工程与正反例已验证 | 语义约定 → ODS → 生成 API → verifier → 注册与打印 → Pass 消费 |
-| C2 | [Trait / Interface 与通用消费者](./compiler/ir_definition/traits_interfaces) | 已编写并验证，待阅读 | 效果与删除判断、范围协议、直接/外部模型及注册 |
-| C3 | [自定义 Type / Attribute](./compiler/ir_definition/types_attributes) | 已编写并验证，待阅读 | 参数定义、两层验证、uniquing、checked 构造与类型相等 |
-| C4 | [Region、可变参数与验证](./compiler/ir_definition/regions_assembly) | 已修订并验证，阅读状态待确认 | 入口/出口对应、隔离与验证顺序 |
-| C5 | [解析与打印](./compiler/ir_definition/assembly_format) | 从区域章独立，已修订并验证 | 文本字段 → OperationState → 验证 → 打印往返 |
-| C6 | Dialect Conversion | 下一模块，待编写；C1 的展开仍是普通 Pattern | legality、类型转换与函数/区域边界衔接 |
+| C2 | [Trait / Interface 与通用消费者](./compiler/ir_definition/traits_interfaces) | 已阅读；工程联系通过增量项目巩固 | 效果与删除判断、范围协议、直接/外部模型及注册 |
+| C3 | [自定义 Type / Attribute](./compiler/ir_definition/types_attributes) | 已阅读；工程联系通过增量项目巩固 | 参数定义、两层验证、uniquing、checked 构造与类型相等 |
+| C4 | [Region、可变参数与验证](./compiler/ir_definition/regions_assembly) | 已阅读；区域扩展留到后续项目阶段 | 入口/出口对应、隔离与验证顺序 |
+| C5 | [解析与打印](./compiler/ir_definition/assembly_format) | 已阅读；本轮观察生成 parser/printer | 文本字段 → OperationState → 验证 → 打印往返 |
+| C6 | Dialect Conversion | 后续模块，待编写；先完成 my.add 普通 Pattern 贯通 | legality、类型转换与函数/区域边界衔接 |
 
 C1 的观察入口为 `aicompiler-labs/llvm-mlir/05-op-definition/`。可按需回查自定义/通用打印、builder 构造与验证结果。C2—C5 共用 `aicompiler-labs/llvm-mlir/06-ir-definition/`，观察脚本按章展示查询、清理、类型身份和区域结构。完整 RegionBranch 模型、多组 variadic 实现、自定义高级存储等继续留作进阶范围，见模块总览与覆盖表。
 
