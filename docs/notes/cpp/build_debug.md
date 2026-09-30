@@ -1,11 +1,13 @@
 ---
 order: 6
 title: 编译、链接与调试
-updated: 2026-09-09
+updated: 2026-09-30
 tags: [cpp, cmake, linking, sanitizer, pybind11]
 ---
 
 # 编译、链接与调试
+
+本篇偏工程概览。如果“头文件提供声明、链接提供实现”仍难以连起来，先读[一个函数怎样从源码进入程序](./source_to_program)，它用同一个小程序逐步解释这些关系；宏与 `.inc` 另见[生成代码篇](./generated_cpp)。
 
 路线：[C++ 工程基础](/notes/cpp/)。本篇讲通用 CPU 工程；CUDA 扩展的 `.cu`、架构参数和 Torch 依赖见 [CUDA CMake 实践](/notes/cuda/cmake)。
 

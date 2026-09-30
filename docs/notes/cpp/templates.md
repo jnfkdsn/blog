@@ -1,11 +1,13 @@
 ---
 order: 5
 title: 模板与编译期编程
-updated: 2026-09-09
+updated: 2026-09-30
 tags: [cpp, template, constexpr, traits]
 ---
 
 # 模板与编译期编程
+
+首次遇到 `function<Type>(value)` 而不清楚尖括号与圆括号各自含义时，先读[读懂带类型参数的函数调用](./template_calls)。本篇在这一基础上继续展开模板机制，不作为当前 MLIR 学习的一次性前置清单。
 
 前置：[基础语法](/notes/cpp/basics)、[移动语义](/notes/cpp/ownership)。目标是读懂 CUDA/CUTLASS 和编译器代码中的类型组合，不以实现复杂元编程库为起点。
 
