@@ -1,7 +1,7 @@
 ---
 order: 1
 title: 学习路径与阶段标准
-updated: 2026-09-24
+updated: 2026-10-01
 ---
 
 # 学习路径与阶段标准
@@ -10,7 +10,10 @@ updated: 2026-09-24
 
 ## 当前从哪里继续
 
-**阶段 A“认识基础 IR + 最小 IR 实验”已完成；阶段 B 的原理与小 Pass 工程已完成理解，阶段 C 的 IR 定义五章已读完，但各机制的工程联系仍需建立。当前转入 [my.add 增量工程](./tutorials/my_dialect/)，先走通最小定义、生成、注册和读写过程。** 已完成基础正文阅读，并独立编写 `sum_positive.mlir`：结构、类型和两个循环状态的传递经审阅与 verifier 检查通过。计数保留 i32 是当前练习的合法选择。
+**当前阅读重写后的 [my.add 第一章](./tutorials/my_dialect/01_minimal_dialect)，再反馈讲解效果。** 三篇 C++ 补充已完成阅读，不再默认继续补基础。新版沿操作定义、生成代码、注册和读取一条具体 IR 展开，保留帮助理解的代码、直接工具命令和结果。现有工程保留供可选实践；其他章节尚未批量改写，代表章效果等待实际阅读反馈。
+
+
+**阶段 A“认识基础 IR + 最小 IR 实验”已完成；阶段 B 的原理与小 Pass 工程已完成理解，阶段 C 的 IR 定义五章已读完，但各机制的联系仍需建立。** [my.add 工程](./tutorials/my_dialect/)已提供，尚不能据此认定相关机制已理解。已完成基础正文阅读，并独立编写 `sum_positive.mlir`：结构、类型和两个循环状态的传递经审阅与 verifier 检查通过。计数保留 i32 是当前练习的合法选择。
 
 工作区还提供了验证、SCF→CF 和 C 调用示例，助手已验证五组 CPU 输入。它们帮助连接观察与执行，不把完整 ABI/lowering、全部错误构造或所有基础专题的深入掌握追加为阶段 A 关卡。
 
@@ -31,9 +34,27 @@ B2 的观察入口为 `aicompiler-labs/llvm-mlir/03-ir-api/`：先预测 RAUW/er
 
 已有传统编译器背景时，CSE、DCE 等熟悉规则可以快速回顾，把精力放在 MLIR 的对象与生命周期、Region 约束、改写协议、legality / TypeConverter、Interface 和内存语义上。常用传统优化及它们依赖的分析可查阅[Dataflow Analysis 与 Pass Pipeline](../traditional/dataflow_pass)；后续的深度通过推导合法性、实现并验证代表性变换建立，不通过增加更多名词或重复简单规则建立。
 
+## 为 AI 编译器学习 MLIR 到什么程度
+
+MLIR 学习服务于解释和修改 AI 编译器中的表示与变换。当前建议以“解释一个小组件、修改一处行为、用正反例检查结果”为近期深度，不要求通读 MLIR 实现或记住生成 API。
+
+| 层次 | 应达到的能力 | 进入下一项工作的边界 |
+|---|---|---|
+| 当前：最小组件 | 说明一个 Op 表达什么、输入输出及合法性；在参考工程上修改定义或一条 Pattern，解释前后 IR 并验证 | 可开始目标项目中一个简单算子的定点阅读，不必实现完整十二项扩展 |
+| 随项目推进：编译路径 | 追踪多层 IR 如何降低；理解需要的 Conversion、tensor/memref、layout、bufferization 和内存/同步约束；跑通一条路径并验证结果 | 按所选项目实际采用的机制补齐，不要求所有编译器都经过同一 pipeline |
+| 具体任务驱动：框架内部 | 深入某个分析、转换或框架实现，解释正确性、失败与性能 | 在修改该组件或排查问题时进入；不把任意 getter 的底层实现作为通用门槛 |
+
+第一行是开始接触项目的标准，不表示长期基础已全部完成。TVM 的首次完整编译观察可以交错进行，也不以写完所有自定义 Type/Attribute/Interface 为前置。
+
+这种安排与目标项目的关系如下。Triton 官方直接列出其 [MLIR dialects](https://triton-lang.org/main/dialects/dialects.html)，[AscendNPU IR](https://github.com/Ascend/AscendNPU-IR)也明确基于 MLIR，因此 IR、Op 定义、Pass 与转换能力可以直接用于阅读这些工程。扩展后端有时需要新增 Op 或 Dialect，但也可能只是修改现有 Pass；具体取决于要表达的新语义和现有抽象是否足够。
+
+[TVM 架构](https://tvm.apache.org/docs/arch/)使用 Relax 与 TensorIR 等自身的表示。学习 MLIR 能帮助建立“抽象保留什么信息、变换为什么合法、怎样逐步降低”的比较视角；这是学习迁移的判断，不意味着 TVM 的这些 IR 就是 MLIR Dialect，也不意味着它们采用同样的对象模型或 API。
+
+“深度”首先由能否解释语义、约束、变换前提与失败原因衡量。API 的拼写、重载和版本细节可以查阅；Op Interface 所表达的效果、类型或区域协议则需要在消费者依赖它时理解。可以暂缓其模板实现，不能忽略它对正确性的影响。
+
 ## 阶段 C：从操作定义继续
 
-[定义 IR 抽象](./compiler/ir_definition/)说明本模块的内部关系，现已备齐本模块五章核心正文。这五章已阅读，但读者反馈概念互相引用、缺少完整工程链。当前不要求重读整组，先跟随 [01：让自己的工具认识 my.add](./tutorials/my_dialect/01_minimal_dialect) 建立统一模型：观察参考工程，再独立完成字段改名任务；后续接入 Pattern/Pass，再逐步增加机制。
+[定义 IR 抽象](./compiler/ir_definition/)说明本模块的内部关系，五章已阅读，但解释组织仍需改进。当前先读重写后的[01：让自己的工具认识 my.add](./tutorials/my_dialect/01_minimal_dialect)，建立定义与变换的整体联系，不要求重读整组或按构建步骤学习。第一章当前只实现定义、读取与检查；普通 Pattern 展开和 Dialect Conversion 仍是后续内容。
 
 | 顺序 | 内容 | 当前状态 | 本次理解目标 |
 |---|---|---|---|

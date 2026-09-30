@@ -1,7 +1,7 @@
 ---
 order: 1
 title: AI Compiler 全景图与 Workspace 学习路线
-updated: 2026-09-05
+updated: 2026-09-30
 tags: [ai-compiler, mlir, llvm, stablehlo, torch-compile, tvm, tensorrt, triton, tilelang, ascend-npu-ir]
 status: draft
 ---
@@ -749,6 +749,8 @@ Kernel 入口：Triton → Triton-Ascend → Linalg/Ascend Adapter IR
 
 目标：能读懂 MLIR 风格 IR 和 Pass 代码，并能独立定义、转换和测试一个小型 Dialect/Op。
 
+执行边界（2026-09-30）：以下内容是逐轮建立的长期范围。第一轮先能解释基础 IR，在参考工程上修改一个简单 Op 或 Pattern，并用输入输出和正反例验证，即可开始目标项目的定点阅读。第二轮随一条实际编译链补 Conversion、张量/内存和所需 lowering；第三轮随实现任务深入分析、优化与框架源码。不能把下列所有条目都当成接触 TVM、Triton 或 AscendNPU IR 之前必须完成的关卡。当前 C++ 前置补充及具体状态见 [MLIR 学习路径](/notes/compile/mlir/learning_path)。
+
 学习内容：
 
 - SSA、use-def、CFG、dominance。
@@ -981,6 +983,8 @@ StableHLO 至少完成：
 ## 十三、学习深度优先级
 
 结合 Ascend NPU IR 实习方向：
+
+下表描述长期能力目标。“核心掌握并能独立实现”指能实现或修改相应组件、解释其语义与约束并测试，不要求从零重写 MLIR 的生成器、Interface 基础设施或 bufferization 框架。源码阅读围绕当前修改与判断展开，API 细节允许查阅。
 
 | 内容 | 建议深度 |
 |---|---|

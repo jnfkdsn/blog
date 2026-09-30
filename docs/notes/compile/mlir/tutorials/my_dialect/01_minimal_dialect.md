@@ -1,16 +1,22 @@
 ---
 order: 1
 title: 01：让自己的工具认识 my.add
-updated: 2026-09-24
+updated: 2026-10-01
 ---
 
 # 01：让自己的工具认识 my.add
 
-前面已经会阅读 IR，也见过 Pass 怎样修改已有操作。现在从一个完整的小工程出发，解释工具为什么能认识一个自己定义的操作。**这一篇只走通“定义 → 生成 C++ → 编译注册 → 读取、验证、打印”的过程。**
+写 Pass 时，我们已经会找到一条 `arith.addi`，取得它的输入，再替换它的结果。那时，加法操作是现成的：框架知道它的名字、输入输出和合法形式，变换只需要使用这些信息。
 
-配套 [lab 入口](https://github.com/jnfkdsn/aicompiler/tree/main/llvm-mlir/my-dialect)与本篇对应的 [阶段 01 源码](https://github.com/jnfkdsn/aicompiler/tree/main/llvm-mlir/my-dialect/stages/01-minimal)位于独立仓库。本地路径是 `aicompiler-labs/llvm-mlir/my-dialect/`。本篇直接给出分步命令、各步产物和生成代码的关键内容；不需要先打开生成文件才能读懂。所有命令都从 workspace 根目录、在同一个 Bash 终端按顺序执行，使用已经构建好的 LLVM/MLIR 20.1.8。
+现在换一个位置：假如要给编译器增加一种操作，这些信息从哪里来？我们需要写一个怎样的定义，才能让工具读取它，让 C++ 代码处理它？
 
-## 1. 先看工具最终要读懂什么
+这一章用 `my.add` 回答这个问题。它仍然表示两个整数相加，刻意沿用熟悉的计算，好把注意力放在“编译器怎样认识一种新操作”上。实际项目已有 `arith.addi` 时通常无需再造一个加法；自定义操作的价值在于表达项目所需的抽象，例如暂时保留一个高层计算，等合适的阶段再展开。
+
+我们先看工具需要认识什么，再解释定义怎样变成工具的能力，最后沿一次实际的读取与检查把它们接起来。
+
+## 1. 写下一条 my.add，究竟增加了什么
+
+希望工具能够处理下面这段程序：
 
 <!-- my-source: input.mlir -->
 ```text
@@ -22,55 +28,49 @@ module {
 }
 ```
 
-我们约定 `my.add` 接收两个 i32，返回按 32 位回绕的和，即模 2³² 加法。这项语义约定为后续转成 `arith.addi` 提供依据。当前版本实现它的表示和合法性检查，没有执行加法。
+我们约定 `my.add` 对两个 32 位整数做加法，超出位宽时保留低 32 位，即结果按模 `2^32` 计算。函数的含义因此很简单：接收两个整数，返回它们的和。例如实参为 2 和 3 时，按照这项约定应返回 5。
 
-第一步的成功标准很具体：自己的 `my-opt` 能读取这段文本，并正常打印同一份 IR。现成的标准工具没有注册我们的 My dialect，不能仅凭名字猜出操作定义。
-
-先预览最终结果。下面是工具构建完成后，读取上面输入的实际输出；后文会逐步构建并亲自运行这个工具：
-
-<!-- my-output: custom -->
-```text
-module {
-  func.func @test(%arg0: i32, %arg1: i32) -> i32 {
-    %0 = my.add %arg0, %arg1 : i32
-    return %0 : i32
-  }
-}
-```
-
-`%a`、`%b` 被 printer 命名为 `%arg0`、`%arg1`，定义和使用关系保持不变。接下来从源码开始，逐步得到这个结果。
-
-## 2. 先把工程中的文件放到正确位置
-
-参考源码仅有六个文件：
+不过，此时我们在写的是供编译器处理的程序表示。读取这段文本时，工具还没有收到运行 `@test` 的实参。它首先需要建立这样的关系：
 
 ```text
-stages/01-minimal/
-├── MyOps.td          操作与方言声明
-├── MyOps.h           接入生成的 C++ 声明
-├── MyOps.cpp         接入生成实现，注册操作
-├── my-opt.cpp        工具入口，提供方言注册表
-├── CMakeLists.txt    规定生成、编译、链接关系
-└── input.mlir        工具处理的输入
+函数的第一个参数 ──→ my.add 的第一个输入
+函数的第二个参数 ──→ my.add 的第二个输入
+                    my.add 的结果 ──→ return 的输入
 ```
 
-构建后会出现另一组文件：
+这些结构 MLIR 本来就能保存。通用的 `Operation` 可以保存操作名、operand、result 及类型等信息，`Value` 可以把生产者和使用者连起来。我们不需要为每增加一种计算重新实现一套数据流图。
 
-```text
-MyOps.td
-  ├─ 生成 MyDialect.h.inc / MyDialect.cpp.inc
-  └─ 生成 MyOps.h.inc / MyOps.cpp.inc
-                  ↓ 被手写 .h / .cpp 包含
-               MyIR 库
-                  ↓ 与工具入口和 MLIR 库链接
-                my-opt
-```
+需要补充的是：**名为 `my.add` 的操作应当怎样使用这套通用结构。** 比如它必须有两个输入和一个结果，三者都是 i32；文本中的两个名字分别指向两个输入；C++ 代码应能取得左输入和右输入。
 
-`.td` 是生成器的输入，`.inc` 是生成器输出的 C++ 片段，`.h/.cpp` 是我们维护的接入代码。它们共同组成一个程序，**不是运行时依次打开的四种文件**。处理 `input.mlir` 时，生成的逻辑早已编译进工具。
+这里有两个不同层次：
 
-## 3. 在 ODS 中写出这一项操作
+| 层次 | 本例中的含义 |
+|---|---|
+| 一种操作的定义 | 所有 `my.add` 都遵守的结构、约束，以及可供框架调用的方法 |
+| 程序中的一次操作 | 上面那一条具体加法，输入引用 `%a` 和 `%b`，结果被 return 使用 |
 
-[MyOps.td](https://github.com/jnfkdsn/aicompiler/blob/main/llvm-mlir/my-dialect/stages/01-minimal/MyOps.td) 的完整内容：
+定义一次之后，一个程序可以包含许多条 `my.add`，每条各有自己的输入和结果。接下来要完成的是前一行的工作，使工具能够正确处理后一行的对象。
+
+## 2. 为什么要把操作定义写成一份描述
+
+先设想完全手工实现。我们至少要告诉工具：
+
+- 操作的名字是 `my.add`，这样读取文本时才能找到对应定义。
+- 左输入位于第一个 operand，右输入位于第二个 operand，方便变换取值。
+- 合法对象有两个 i32 输入和一个 i32 结果，以便检查错误。
+- `my.add %a, %b : i32` 中每段文本怎样对应这些字段，以便解析和打印。
+
+这些工作中有很多重复关系。一旦已经声明“第一个输入叫 lhs，类型为 I32”，生成一个 `getLhs()` 访问器和对应的类型检查就有了确定依据。若每个操作都手写这些重复代码，很容易出现声明、访问和验证不一致。
+
+MLIR 因而提供 **ODS（Operation Definition Specification）**：使用基于 TableGen 的描述，集中写下操作的信息，再生成相应的 C++ 代码。
+
+这里的“生成”可以按字面理解：一个工具读取描述文件，把类声明和方法实现写进源码文件，随后由 C++ 编译器编译。生成器掌握的是 MLIR 已经规定的结构和实现规则。
+
+计算语义还需要开发者约定。例如“结果等于两个输入之和”不能由名字 `add` 自动推断。本章先让工具拥有表示和检查这项计算的能力；真正把它变成可执行计算，需要后续的变换或执行实现。
+
+## 3. 把刚才的约定写进 ODS
+
+下面是本例完整的 `MyOps.td`。先沿着“名字、输入、结果、文本写法”读，就能把它与前面的需求对应起来：
 
 <!-- my-source: MyOps.td -->
 ```text
@@ -96,168 +96,110 @@ def My_AddOp : Op<My_Dialect, "add"> {
 #endif
 ```
 
-先沿主例需要的内容逐项对应：
+`My_Dialect` 定义一组操作所属的方言。这里的方言名是 `my`，操作在其中叫 `add`，两者组成 IR 里的完整名字 `my.add`。`cppNamespace` 则安排生成的 C++ 类放在 `mlir::my` 命名空间中。方言在这个例子里先只组织这一种操作。
 
-| 声明 | 本例中确定了什么 |
-|---|---|
-| `name = "my"` | 操作名使用 my 方言前缀 |
-| `cppNamespace = "::mlir::my"` | 生成的 C++ 类放在这个命名空间 |
-| `Op<My_Dialect, "add">` | 完整操作名为 my.add，生成操作类 AddOp |
-| `I32:$lhs, I32:$rhs` | 两个 operand，分别命名为 lhs/rhs，类型均要求 i32 |
-| `I32:$result` | 一个 i32 结果 |
-| `assemblyFormat` | 文本按“左输入、逗号、右输入、可选属性字典、冒号、结果类型”排列 |
-
-`lhs` 是操作字段的名字；`%a` 是某段文本中的 SSA 名称。把同一份 IR 的 `%a` 换名，不会改变生成类的 `getLhs()`。反过来，重命名 ODS 字段，会影响生成访问器，但不必改变用户程序的 SSA 名字。
-
-这里用了 TableGen 的记录语法，ODS 规定这些字段如何描述 MLIR 操作。我们先使用它声明结构，不需要先学习整个 TableGen 语言。
-
-类型约束直接写成 I32，使两项输入和结果都固定为 i32。后面若支持多种类型，才需要考虑怎样表达它们之间的关系。本篇没有加入自定义 Trait、Interface、Type、Attribute 或 Region。
-
-## 4. 先配置工程，再单独生成 C++
-
-### 4.1 CMake 先建立构建规则
-
-先为三个已有位置取短名字：源码目录、LLVM 构建目录、本教程的构建目录。这里使用独立的 `my-dialect-01-steps`，便于观察首次构建；此前脚本生成的 `my-dialect-01` 可以保留。
-
-<!-- my-command: configure -->
-```bash
-MYLAB_SRC="$PWD/aicompiler-labs/llvm-mlir/my-dialect/stages/01-minimal"
-MYLAB_LLVM="$PWD/artifacts/builds/mlir-20.1.8"
-MYLAB_BUILD="$PWD/artifacts/builds/my-dialect-01-steps"
-
-cmake -S "$MYLAB_SRC" -B "$MYLAB_BUILD" -G Ninja \
-  -DMLIR_DIR="$MYLAB_LLVM/lib/cmake/mlir" \
-  -DLLVM_DIR="$MYLAB_LLVM/lib/cmake/llvm" \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_CXX_COMPILER=/usr/bin/clang++ \
-  -DCMAKE_C_COMPILER=/usr/bin/clang
-```
-
-成功输出的末尾包含 `Configuring done`、`Generating done` 与构建目录位置。此时得到 `CMakeCache.txt` 和 `build.ninja` 等构建配置，**还没有编译自己的操作实现**。MLIR_DIR/LLVM_DIR 用来找到已有 LLVM/MLIR 的配置、头文件和库，不会在这里重新编译整个 LLVM。
-
-CMake 根据什么建立生成规则？本工程 [CMakeLists.txt](https://github.com/jnfkdsn/aicompiler/blob/main/llvm-mlir/my-dialect/stages/01-minimal/CMakeLists.txt) 的这六行规定了四项生成任务：
-
-```cmake
-set(LLVM_TARGET_DEFINITIONS MyOps.td)
-mlir_tablegen(MyOps.h.inc -gen-op-decls)
-mlir_tablegen(MyOps.cpp.inc -gen-op-defs)
-mlir_tablegen(MyDialect.h.inc -gen-dialect-decls -dialect=my)
-mlir_tablegen(MyDialect.cpp.inc -gen-dialect-defs -dialect=my)
-add_public_tablegen_target(MyIncGen)
-```
-
-`mlir_tablegen` 是 CMake 辅助函数，它安排构建时调用 `mlir-tblgen`。四次调用读取同一个 `.td`，选择不同生成器；`MyIncGen` 把这些任务归为一个可以单独构建的目标。
-
-<details>
-<summary>完整 CMakeLists.txt：需要核对工程配置时展开</summary>
-
-<!-- my-source: CMakeLists.txt -->
-```cmake
-cmake_minimum_required(VERSION 3.20)
-project(my_dialect_stage01 LANGUAGES C CXX)
-find_package(MLIR REQUIRED CONFIG)
-list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}" "${LLVM_CMAKE_DIR}")
-include(TableGen)
-include(AddLLVM)
-include(AddMLIR)
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-include_directories(SYSTEM ${LLVM_INCLUDE_DIRS} ${MLIR_INCLUDE_DIRS})
-include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
-add_definitions(${LLVM_DEFINITIONS})
-if(NOT LLVM_ENABLE_RTTI)
-  add_compile_options(-fno-rtti)
-endif()
-set(LLVM_TARGET_DEFINITIONS MyOps.td)
-mlir_tablegen(MyOps.h.inc -gen-op-decls)
-mlir_tablegen(MyOps.cpp.inc -gen-op-defs)
-mlir_tablegen(MyDialect.h.inc -gen-dialect-decls -dialect=my)
-mlir_tablegen(MyDialect.cpp.inc -gen-dialect-defs -dialect=my)
-add_public_tablegen_target(MyIncGen)
-add_library(MyIR STATIC MyOps.cpp)
-add_dependencies(MyIR MyIncGen)
-target_link_libraries(MyIR PUBLIC MLIRIR)
-add_executable(my-opt my-opt.cpp)
-target_link_libraries(my-opt PRIVATE MyIR MLIROptLib MLIRFuncDialect)
-```
-
-`include_directories` 同时包含源码与构建目录，所以手写文件能找到构建目录里的 `.inc`。`add_dependencies(MyIR MyIncGen)` 保证先生成再编译。最后几行的库与可执行目标会在第 5、6 节分别构建。
-
-</details>
-
-### 4.2 只运行 TableGen，暂不编译 C++
-
-<!-- my-command: generate -->
-```bash
-cmake --build "$MYLAB_BUILD" --target MyIncGen -j2
-```
-
-首次运行会看到下面四项任务；并行执行顺序可能不同，因此这里省略进度编号：
+真正规定加法结构的是下面两行：
 
 ```text
-Building MyOps.h.inc...
-Building MyOps.cpp.inc...
-Building MyDialect.h.inc...
-Building MyDialect.cpp.inc...
+let arguments = (ins I32:$lhs, I32:$rhs);
+let results = (outs I32:$result);
 ```
 
-现在构建目录中新增四个 `.inc` 文件。它们还是 C++ 文本，没有变成库或可执行文件。重复运行时若输入未变化，Ninja 会报告 `no work to do`，不必删除产物来重复观察。
+第一行按顺序声明两个输入，分别叫 lhs 和 rhs，类型约束都是 I32；第二行声明一个 i32 结果。这里的 I32 指 32 位 signless integer。操作如何解释这些位，由计算语义规定；本例采用前面约定的回绕加法。
 
-想看到完整的生成器调用，可在这条构建命令末尾加 `--verbose`；若已无任务要运行，用 `ninja -C "$MYLAB_BUILD" -t commands MyIncGen` 查看保存的命令。
+`lhs` 是**定义中的字段名**，`%a` 是**某段程序里被引用的值的文本名字**。对于开头那条加法，lhs 对应 `%a`；另一条加法可以让 lhs 对应 `%x`。所以把字段叫 lhs，不是在创建一个名为 `%lhs` 的变量。
 
-<details>
-<summary>直接调用 mlir-tblgen 是什么样子？</summary>
+现在回看文本写法：
 
-下面是本例可独立运行的最小生成命令。输入是 MyOps.td，`-I` 用来找到它包含的 MLIR 定义，`-o` 指定输出。为了与 CMake 管理的产物区分，输出放在 `tblgen-preview/`：
+```text
+$lhs       `,`      $rhs       attr-dict       `:`     type($result)
+ ↓          ↓        ↓         本例为空         ↓            ↓
+%a          ,       %b                         :           i32
+```
+
+`assemblyFormat` 把字段安排到文本里：先写左输入、逗号、右输入，再写可选的额外属性字典，最后写冒号和结果类型。当前输入没有额外属性，所以看不到字典。操作名和结果赋值部分由外围的操作打印流程处理，不需要再次写进这行格式。
+
+这样，工具需要的结构与语法已经有了来源。`summary` 和 `description` 记录含义；输入、结果及格式声明则能用于生成具体方法。接下来看看其中一项如何变成可用的 C++。
+
+## 4. 一项声明怎样变成 C++ 能力
+
+假设当前目录保存着刚才的 `MyOps.td`，使用对应版本的 `mlir-tblgen`，并让 `MLIR_INCLUDE_DIR` 指向包含 `mlir/IR/OpBase.td` 的 MLIR include 目录。下面的命令会生成操作类声明及部分类内方法：
 
 <!-- my-command: tblgen -->
 ```bash
-mkdir -p "$MYLAB_BUILD/tblgen-preview"
-"$MYLAB_LLVM/bin/mlir-tblgen" "$MYLAB_SRC/MyOps.td" \
-  -I "$PWD/upstream/llvm-project/mlir/include" \
-  -gen-op-decls -o "$MYLAB_BUILD/tblgen-preview/MyOps.h.inc"
+mlir-tblgen --gen-op-decls MyOps.td \
+  -I "$MLIR_INCLUDE_DIR" -o MyOps.h.inc
 ```
 
-切换为 `-gen-op-defs` 生成操作实现；切换为 `-gen-dialect-decls -dialect=my` 或 `-gen-dialect-defs -dialect=my` 生成方言声明或实现，同时更改输出文件名。本例只需上述 include 路径；其他工程可能还需要 LLVM 头文件或生成目录。CMake 的实际命令还包含依赖记录等选项。
+命令里的输入是 **操作定义 `MyOps.td`**，输出是 **C++ 源码片段 `MyOps.h.inc`**。此时还没有读取开头那个 `@test`，也没有创建它里面的加法对象。
 
-</details>
+在生成的 `mlir::my::AddOp` 类中，实际可以看到：
 
-### 4.3 先看方言：名字变成类，构造函数调用初始化
-
-MyDialect.h.inc 中生成了下面这个类，摘录省略文件头、外层命名空间与类型标识宏：
-
-<!-- my-generated: MyDialect.h.inc -->
+<!-- my-generated: MyOps.h.inc -->
 ```cpp
-class MyDialect : public ::mlir::Dialect {
-  explicit MyDialect(::mlir::MLIRContext *context);
-
-  void initialize();
-  friend class ::mlir::MLIRContext;
-public:
-  ~MyDialect() override;
-  static constexpr ::llvm::StringLiteral getDialectNamespace() {
-    return ::llvm::StringLiteral("my");
-  }
-};
-```
-
-`.td` 中的 `name = "my"` 变成 `getDialectNamespace()` 的返回值。类声明提供 `initialize()`，但此处没有它的函数体。
-
-再看 MyDialect.cpp.inc 的构造函数。下面是实际生成内容，仅整理空白：
-
-<!-- my-generated: MyDialect.cpp.inc -->
-```cpp
-MyDialect::MyDialect(::mlir::MLIRContext *context)
-    : ::mlir::Dialect(getDialectNamespace(), context, ::mlir::TypeID::get<MyDialect>()) {
-  initialize();
+::mlir::TypedValue<::mlir::IntegerType> getLhs() {
+  return ::llvm::cast<::mlir::TypedValue<::mlir::IntegerType>>(*getODSOperands(0).begin());
 }
 ```
 
-它调用 `initialize()`，而工程作者必须提供这个函数，登记当前方言的操作。第 5 节正好补上这一环。此时不要把“生成类”理解成已经创建了方言对象：对象是在工具运行时由 Context 加载方言时创建的。
+`getODSOperands(0)` 取得定义中的第一个输入组。本例这一组只有一个输入，所以取其第一个元素就是 lhs。返回值是一个表示整数类型 Value 的句柄，指向这条操作已有的输入。
 
-### 4.4 再看操作：命名字段变成访问器
+现在把它放回开头的 IR：若 C++ 代码中的 `add` 是那条 `my.add` 的访问句柄，`add.getLhs()` 得到的就是函数参数 `%a` 所对应的 Value。它不会读取一个运行时整数，也没有执行加法。`getRhs()` 同理取得 `%b`。
 
-MyOps.h.inc 中的 AddOp 类记录操作名：
+这就接上了前面写 Pass 的经验：过去使用现成的 `arith::AddIOp` 读取输入；现在 ODS 帮我们为自己的操作生成了相应访问方式。底层仍是通用 Operation 保存的那组 operand，生成的 AddOp 提供符合这项定义的访问接口。
+
+构造操作也有同样的对应。选择生成操作实现的后端后，`MyOps.cpp.inc` 中有这样一个实际方法：
+
+<!-- my-generated: MyOps.cpp.inc -->
+```cpp
+void AddOp::build(::mlir::OpBuilder &odsBuilder,
+                  ::mlir::OperationState &odsState, ::mlir::Type result,
+                  ::mlir::Value lhs, ::mlir::Value rhs) {
+  odsState.addOperands(lhs);
+  odsState.addOperands(rhs);
+  odsState.addTypes(result);
+}
+```
+
+这个 builder 把调用者提供的两个 Value 按顺序写入待构造状态，并记录结果类型。它与访问器正好相接：构造时放在第一个位置的值，之后由 `getLhs()` 取得。这里的 `build` 是构造 IR 对象所需信息的方法，与编译链接工程的 build 是两回事。
+
+可以看到，这段 builder 没有执行类型检查；操作验证另有对应方法。构造、访问和验证各自完成不同工作，ODS 让它们依据同一份定义生成。
+
+本例工程还从同一个 `.td` 生成操作实现、方言声明和方言实现。四个输出的组织方式是：
+
+| 输出 | 保存的 C++ 内容 |
+|---|---|
+| `MyOps.h.inc` | AddOp 声明、访问器等 |
+| `MyOps.cpp.inc` | 构造、解析、打印和约束检查等实现，以及操作类型列表 |
+| `MyDialect.h.inc` | MyDialect 类声明 |
+| `MyDialect.cpp.inc` | MyDialect 构造函数等实现 |
+
+它们共同为工具提供处理 `my.add` 的代码。首次理解这一过程，关键是知道声明如何影响生成的方法，而不需要逐行阅读全部生成产物。
+
+## 5. 这些代码怎样进入工具，并被框架找到
+
+生成的 `.inc` 仍然是 C++ 文本。手写的头文件和实现文件通过 `#include` 把它们纳入普通 C++ 编译。例如，头文件中有：
+
+```cpp
+#include "MyDialect.h.inc"
+#define GET_OP_CLASSES
+#include "MyOps.h.inc"
+```
+
+`GET_OP_CLASSES` 是预处理时的选择开关，让生成文件中相应的操作类内容进入当前源码。实现文件采用同样方式包含 `.cpp.inc` 中的实现。编译和链接完成后，这些能力就成为工具的一部分；工具处理 IR 时调用的是已经编译好的代码。
+
+但“代码已编译进去”还缺少一层联系。解析器读到字符串 `my.add` 时，需要知道应该使用哪套解析、验证和打印方法。**注册就是把操作名与处理这种操作的代码联系起来。**
+
+本例方言初始化时登记它包含的操作。将生成的单项类型列表展开后，核心代码等价于：
+
+<!-- my-equivalent: initialize -->
+```cpp
+void MyDialect::initialize() {
+  addOperations<AddOp>();
+}
+```
+
+这次调用登记的是 **AddOp 这类操作的定义信息**。它没有向某个函数插入一条加法。框架可以从 AddOp 获得操作名及对应方法；其中操作名也是生成的：
 
 <!-- my-generated: MyOps.h.inc -->
 ```cpp
@@ -266,333 +208,143 @@ static constexpr ::llvm::StringLiteral getOperationName() {
 }
 ```
 
-同一个类里的两个访问器如下：
+工具入口还需要告诉 MLIR，它能提供哪些方言。下面是 `main` 中的相关部分：
 
-<!-- my-generated: MyOps.h.inc -->
+<!-- my-source-fragment: my-opt.cpp -->
 ```cpp
-::mlir::TypedValue<::mlir::IntegerType> getLhs() {
-  return ::llvm::cast<::mlir::TypedValue<::mlir::IntegerType>>(*getODSOperands(0).begin());
-}
-
-::mlir::TypedValue<::mlir::IntegerType> getRhs() {
-  return ::llvm::cast<::mlir::TypedValue<::mlir::IntegerType>>(*getODSOperands(1).begin());
-}
+mlir::DialectRegistry registry;
+registry.insert<mlir::my::MyDialect, mlir::func::FuncDialect>();
+return mlir::asMainReturnCode(
+    mlir::MlirOptMain(argc, argv, "My dialect: stage 01\n", registry));
 ```
 
-这段代码把 `.td` 的字段与底层 Operation 连了起来：`lhs` 对应第 0 个 operand，`rhs` 对应第 1 个 operand；访问器取得已经存在的 SSA Value。它们没有执行加法，也没有另外存一份 lhs/rhs 数据。结果字段同样生成 `getResult()`。
+Registry 提供 My 和 Func 方言的加载信息。工具使用的 `MLIRContext` 可以据此加载 MyDialect；其生成的构造函数调用 `initialize()`，将 AddOp 登记进去。`MlirOptMain` 提供常见的读入 IR、运行所选 Pass、验证和打印的工具流程，因此这里不用再手写文件读取和命令行驱动。
 
-MyOps.cpp.inc 中还生成了构造状态的方法。这里只取一个重载：
-
-<!-- my-generated: MyOps.cpp.inc -->
-```cpp
-void AddOp::build(::mlir::OpBuilder &odsBuilder, ::mlir::OperationState &odsState, ::mlir::Type result, ::mlir::Value lhs, ::mlir::Value rhs) {
-  odsState.addOperands(lhs);
-  odsState.addOperands(rhs);
-  odsState.addTypes(result);
-}
-```
-
-它向 OperationState 写入两个 operand 和一个结果类型，供 C++ 构造操作时使用。这里的 `AddOp::build` 与前面的 `cmake --build` 处于不同过程：前者构造 IR 的状态，后者编译编译器程序。读取文本时会走 parser，不是先执行这段 build 再执行 parser。
-
-### 4.5 文本格式与类型约束也有生成实现
-
-`assemblyFormat` 指定先读 lhs、逗号、rhs。生成的 `AddOp::parse` 中就有对应代码，以下为连续摘录：
-
-<!-- my-generated: MyOps.cpp.inc -->
-```cpp
-lhsOperandsLoc = parser.getCurrentLocation();
-if (parser.parseOperand(lhsRawOperand))
-  return ::mlir::failure();
-if (parser.parseComma())
-  return ::mlir::failure();
-
-rhsOperandsLoc = parser.getCurrentLocation();
-if (parser.parseOperand(rhsRawOperand))
-  return ::mlir::failure();
-```
-
-在读完属性字典、冒号与结果类型之后，parser 还需要把这些文本引用解析成实际 Value：
-
-<!-- my-generated: MyOps.cpp.inc -->
-```cpp
-::mlir::Type odsBuildableType0 = parser.getBuilder().getIntegerType(32);
-result.addTypes(resultTypes);
-if (parser.resolveOperands(lhsOperands, odsBuildableType0, lhsOperandsLoc, result.operands))
-  return ::mlir::failure();
-if (parser.resolveOperands(rhsOperands, odsBuildableType0, rhsOperandsLoc, result.operands))
-  return ::mlir::failure();
-return ::mlir::success();
-```
-
-这里 I32 让生成器能够直接构造输入所需的 i32 类型；`resolveOperands` 将先前读到的 SSA 引用解析为 operand，写入状态。文本中的结果类型则由 `result.addTypes` 记录。
-
-反方向的 `AddOp::print` 会通过 `getLhs()`、`getRhs()` 打印 operand 引用，再输出属性字典与结果类型。例如其中的连续摘录是：
-
-<!-- my-generated: MyOps.cpp.inc -->
-```cpp
-_odsPrinter << getLhs();
-_odsPrinter << ",";
-_odsPrinter << ' ';
-_odsPrinter << getRhs();
-```
-
-因此只写一行 assemblyFormat，确实可以得到一对 parser/printer。
-
-类型检查也有对应代码。MyOps.cpp.inc 为 I32 生成的辅助函数如下：
-
-<!-- my-generated: MyOps.cpp.inc -->
-```cpp
-static ::llvm::LogicalResult __mlir_ods_local_type_constraint_MyOps1(
-    ::mlir::Operation *op, ::mlir::Type type, ::llvm::StringRef valueKind,
-    unsigned valueIndex) {
-  if (!((type.isSignlessInteger(32)))) {
-    return op->emitOpError(valueKind) << " #" << valueIndex
-        << " must be 32-bit signless integer, but got " << type;
-  }
-  return ::mlir::success();
-}
-```
-
-生成的 `verifyInvariantsImpl()` 会对两个 operand 和结果分别调用这个检查函数。比如它遍历第一个 operand 对应范围时，调用如下：
-
-<!-- my-generated: MyOps.cpp.inc -->
-```cpp
-for (auto v : valueGroup0) {
-  if (::mlir::failed(__mlir_ods_local_type_constraint_MyOps1(*this, v.getType(), "operand", index++)))
-    return ::mlir::failure();
-}
-```
-
-结构上的“两个输入、一个结果”还有生成到操作类上的数量约束，由验证框架检查。后文将故意给第一个输入传入 i64，观察这里的错误信息。
-
-至此，四个文件的分工已经具体可见：方言声明/构造函数、操作声明/访问器，以及操作构造、解析、打印、验证的实现。下一步把这些 C++ 片段接入库。
-
-## 5. 生成代码怎样接入手写 C++
-
-先看 [MyOps.h](https://github.com/jnfkdsn/aicompiler/blob/main/llvm-mlir/my-dialect/stages/01-minimal/MyOps.h)：
-
-<!-- my-source: MyOps.h -->
-```cpp
-#ifndef MY_OPS_H
-#define MY_OPS_H
-#include "mlir/IR/BuiltinTypes.h"
-#include "mlir/IR/Dialect.h"
-#include "mlir/IR/OpDefinition.h"
-#include "MyDialect.h.inc"
-#define GET_OP_CLASSES
-#include "MyOps.h.inc"
-#endif
-```
-
-前几个 include 提供 MLIR 基础类型；`MyDialect.h.inc` 给出生成的方言类声明；`GET_OP_CLASSES` 选择生成文件中的操作类声明部分，再包含 `MyOps.h.inc`。因此其他 C++ 文件只需包含 MyOps.h，就能使用 MyDialect 和 AddOp。
-
-再看 [MyOps.cpp](https://github.com/jnfkdsn/aicompiler/blob/main/llvm-mlir/my-dialect/stages/01-minimal/MyOps.cpp)：
-
-<!-- my-source: MyOps.cpp -->
-```cpp
-#include "MyOps.h"
-#include "mlir/IR/Builders.h"
-#include "mlir/IR/OpImplementation.h"
-using namespace mlir;
-using namespace mlir::my;
-#include "MyDialect.cpp.inc"
-#define GET_OP_CLASSES
-#include "MyOps.cpp.inc"
-
-void MyDialect::initialize() {
-  addOperations<
-#define GET_OP_LIST
-#include "MyOps.cpp.inc"
-      >();
-}
-```
-
-上半部分包含生成实现，下半部分定义方言初始化时要登记哪些操作。`GET_OP_LIST` 选择同一生成文件中的操作类型列表；在这个阶段，列表里只有 `mlir::my::AddOp`，交给 `addOperations` 注册。
-
-同一个 `.inc` 被包含两次，是通过不同宏选择不同片段。它在预处理/编译时拼接 C++ 内容，不是程序运行时读文件，也不是把操作对象创建了两次。
-
-现在用刚才生成的 C++ 编译方言库：
-
-<!-- my-command: library -->
-```bash
-cmake --build "$MYLAB_BUILD" --target MyIR -j2
-```
-
-首次运行的任务内容是：
+现在已经有了完整的接入关系：
 
 ```text
-Building CXX object CMakeFiles/MyIR.dir/MyOps.cpp.o
-Linking CXX static library libMyIR.a
+MyOps.td 描述操作
+  → mlir-tblgen 写出 C++ 代码
+  → 手写源码包含生成代码，编译链接为 my-opt
+
+运行 my-opt
+  → Registry 使 MyDialect 可被加载
+  → 加载方言时登记 AddOp
+  → 框架能够按 my.add 找到相应处理方法
 ```
 
-MyOps.cpp 包含的 `.inc` 随它一起编译，不会各自编译成独立 `.o`。这里实际生成 `CMakeFiles/MyIR.dir/MyOps.cpp.o`，再归档为 `libMyIR.a`。方言定义已经进入库，但库本身没有 main，不能直接接收 input.mlir。接下来编译工具入口并链接它。
+上半段使工具拥有代码，下半段使运行中的框架能够使用它。接下来让这些方法处理一次具体输入。
 
-## 6. 工具运行时怎样找到这个操作
+## 6. 沿一次读取，看定义怎样起作用
 
-[my-opt.cpp](https://github.com/jnfkdsn/aicompiler/blob/main/llvm-mlir/my-dialect/stages/01-minimal/my-opt.cpp) 的完整入口：
-
-<!-- my-source: my-opt.cpp -->
-```cpp
-#include "MyOps.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Tools/mlir-opt/MlirOptMain.h"
-int main(int argc, char **argv) {
-  mlir::DialectRegistry registry;
-  registry.insert<mlir::my::MyDialect, mlir::func::FuncDialect>();
-  return mlir::asMainReturnCode(
-      mlir::MlirOptMain(argc, argv, "My dialect: stage 01\n", registry));
-}
-```
-
-registry 向工具提供 My 与 Func dialect 的加载信息。输入中的 `func.func`/`return` 来自 Func，`my.add` 来自 My；外层 module 是工具支持的 builtin 操作。加载 My dialect 时，前面的 initialize 会登记 AddOp。
-
-编译并链接工具：
-
-<!-- my-command: tool -->
-```bash
-cmake --build "$MYLAB_BUILD" --target my-opt -j2
-```
-
-在前面已构建好 MyIR 的情况下，新增任务是：
-
-```text
-Building CXX object CMakeFiles/my-opt.dir/my-opt.cpp.o
-Linking CXX executable my-opt
-```
-
-CMake 的 `target_link_libraries` 把 MyIR、工具驱动库 MLIROptLib 和 Func dialect 库接到 my-opt。现在才得到可执行文件。下面亲自让它读取本章开头的输入：
+假设已经构建出 `my-opt`，当前目录下有这个可执行文件，以及保存第一节程序的 `input.mlir`。直接运行：
 
 <!-- my-command: run -->
 ```bash
-"$MYLAB_BUILD/my-opt" "$MYLAB_SRC/input.mlir"
+./my-opt input.mlir
 ```
 
-输出就是第 1 节展示的正常 IR：两个函数参数成为 `%arg0`、`%arg1`，my.add 仍然存在，并由 return 使用其结果。这一条命令完成解析、验证和打印；我们没有给工具安排变换 Pass。
+本例没有指定变换 Pass，工具读取、验证并重新打印这份 IR，实际输出为：
 
-现在可以沿本次输入走一遍运行链：
-
+<!-- my-output: custom -->
 ```text
-my-opt 接收 input.mlir
-  → 解析器需要识别 my.add
-  → Context 可从 registry 加载 My dialect，并取得已注册的 AddOp 信息
-  → 生成的 parser 读取两个 SSA operand 引用与格式中的类型
-  → 构造内存中的 Operation
-  → 工具运行完整验证，其中包含生成的操作约束检查
-  → printer 将对象写回文本
+module {
+  func.func @test(%arg0: i32, %arg1: i32) -> i32 {
+    %0 = my.add %arg0, %arg1 : i32
+    return %0 : i32
+  }
+}
 ```
 
-这里没有手写一个“执行加法”的回调。读取 `my.add` 是建立一个表达加法的 IR 节点；将它转换成标准操作、继续生成可执行代码，是后续任务。
+这次运行中，前面准备的各项能力按下面的关系配合：
 
-可以把构建与运行两条链连起来理解：ODS 使工具在构建后具有认识 AddOp 的代码，注册使运行中的工具能找到这套代码，parser 才能按契约构造具体对象。
+1. 读取函数参数时，建立两个 i32 的 BlockArgument；文本里的 `%a`、`%b` 指向它们。
+2. 读到 `my.add`，框架找到已注册的操作定义，使用生成的专用 parser 读取后面的文本。
+3. parser 按格式读到两个输入引用，找到对应 Value，并记录结果类型。框架据此构造具体的 Operation。
+4. 读取 return 时，将它的输入接到新加法的结果上。工具验证 IR，其中包括输入、结果数量及 I32 类型约束。
+5. printer 从当前对象读取输入、结果和类型，再按规定的文本格式输出。
 
-## 7. 直接观察打印往返，再触发一次类型检查
+打印器为函数参数选择了 `%arg0`、`%arg1` 这样的名字，引用关系保持不变。**整个过程完成的是让编译器读懂并检查一项计算的表示。** 它没有调用 `@test(2, 3)`，所以输出是 IR，而不是数字 5。
 
-通用格式让 operand 与 result 的类型全部显式出现：
+换一种打印方式，更容易直接看见操作的结构：
 
 <!-- my-command: generic -->
 ```bash
-"$MYLAB_BUILD/my-opt" "$MYLAB_SRC/input.mlir" --mlir-print-op-generic
+./my-opt input.mlir --mlir-print-op-generic
 ```
 
-实际完整输出：
+下面只摘录其中的加法行：
 
-<!-- my-output: generic -->
+<!-- my-output-fragment: generic -->
 ```text
-"builtin.module"() ({
-  "func.func"() <{function_type = (i32, i32) -> i32, sym_name = "test"}> ({
-  ^bb0(%arg0: i32, %arg1: i32):
-    %0 = "my.add"(%arg0, %arg1) : (i32, i32) -> i32
-    "func.return"(%0) : (i32) -> ()
-  }) : () -> ()
-}) : () -> ()
+%0 = "my.add"(%arg0, %arg1) : (i32, i32) -> i32
 ```
 
-重点看 my.add 那一行：两个输入、一个结果都明确列出。正常格式中的逗号、冒号等由 assemblyFormat 规定；通用格式使用 MLIR 的通用语法表示同一操作结构。
+通用格式明确列出两个输入类型和一个结果类型。它与前面的简洁格式描述同一个对象。再次读取通用格式时，通用 parser 按统一语法填写操作字段；之后仍然使用已注册操作的约束检查。这给了我们一个直接观察“结构可以写出来，但不符合定义”的机会。
 
-亲自做一次往返，把中间结果保存在本次构建目录：
+## 7. 改变一个输入，看看谁会拒绝它
 
-<!-- my-command: roundtrip -->
-```bash
-"$MYLAB_BUILD/my-opt" "$MYLAB_SRC/input.mlir" > "$MYLAB_BUILD/custom.mlir"
-"$MYLAB_BUILD/my-opt" "$MYLAB_SRC/input.mlir" --mlir-print-op-generic > "$MYLAB_BUILD/generic.mlir"
-"$MYLAB_BUILD/my-opt" "$MYLAB_BUILD/generic.mlir" > "$MYLAB_BUILD/roundtrip.mlir"
-diff -u "$MYLAB_BUILD/custom.mlir" "$MYLAB_BUILD/roundtrip.mlir"
-```
+只把第一个参数改为 i64，并用通用语法显式记录这个类型：
 
-本例中 diff 没有输出，退出状态为 0：通用打印再解析后，正常输出没有变化。
-
-再只改变第一个输入的类型，让它成为 i64。下面通过标准输入提供一个完整模块，不需要先创建错误文件：
-
-<!-- my-command: invalid -->
-```bash
-"$MYLAB_BUILD/my-opt" <<'MLIR'
+<!-- my-invalid: operand-type | operand #0 must be 32-bit signless integer -->
+```text
 module {
   func.func @bad(%a: i64, %b: i32) {
     %0 = "my.add"(%a, %b) : (i64, i32) -> i32
     return
   }
 }
-MLIR
 ```
 
-该命令预期失败，诊断的核心内容为：
+这段文本足以描述一个通用 Operation：有名字、两个 operand、一个结果，引用本身也找得到。但它违背了我们给 `my.add` 规定的 I32 输入约束。
+
+用同一个工具读取这段输入，会得到非零退出状态，诊断中包含：
 
 ```text
 'my.add' op operand #0 must be 32-bit signless integer, but got 'i64'
 ```
 
-通用语法显式给出了 i64，因此能先建立这个操作，再由操作验证拒绝它。回看第 4.5 节：第 0 个 operand 的类型进入 `isSignlessInteger(32)` 检查并失败，正好产生这里的错误。这说明生成代码已经参与运行中的决定，而不只是目录里多了几个文件。
+这条信息可以追溯到 ODS 的 `I32:$lhs`。生成的验证代码取得第 0 个 operand 的类型，检查它是否为 32 位 signless integer；遇到 i64 就报告错误。数量约束也有相应检查，例如只提供一个 operand 会被拒绝。
 
-## 8. 轮到你改一个字段
+于是，“在 `.td` 中写下 I32”已经不只是文档说明：它产生了代码，代码接入工具，并在读取不符合约定的 IR 时影响了结果。
 
-任务是将第一个 operand 的 ODS 名称从 lhs 改为 left，同时更新 assemblyFormat 中的对应引用，观察生成访问器与 IR 文本是否变化。先写预测，再构建验证。
+回到第二节的语义约定，也能看出验证的边界。检查两个输入是不是 i32，并不能证明未来的实现真的把它们相加。如果后续错误地把 `my.add` 转换为减法，类型检查可能仍然通过；变换作者还需要保持计算含义，并用相应测试检查。
 
-先创建你的副本；已有目录时保留它，不覆盖改动：
+## 8. 从定义接回已经学过的变换
 
-```bash
-MYLAB_WORK="$PWD/aicompiler-labs/llvm-mlir/my-dialect/work/01-rename"
-mkdir -p "$(dirname "$MYLAB_WORK")"
-if [ ! -e "$MYLAB_WORK" ]; then
-  cp -R "$MYLAB_SRC" "$MYLAB_WORK"
-fi
+现在工具已经能保存一个 `my.add`，C++ 代码可以取得其两个输入和结果，错误的结构或类型也会被拒绝。下一步，前面学过的 Pattern 和 Pass 就有了可以处理的对象。
+
+对于本例约定的 i32 回绕加法，可以把目标变换写成下面的局部示意：
+
+```text
+变换前：%r = my.add     %a, %b : i32
+变换后：%r = arith.addi %a, %b : i32
 ```
 
-编辑 `work/01-rename/MyOps.td` 后，给这份源码配置独立构建目录。下面的步骤与参考工程完全相同，只有源码和输出位置变化：
+实现时会读取原操作的两个 operand，创建一条无 overflow flags 的 `arith.addi`，将旧结果的使用转接到新结果，再删除原操作。这里打印成相同的 `%r` 只是方便对照；内存中创建了新的结果 Value，并更新使用关系。
 
-```bash
-MYLAB_TASK_BUILD="$PWD/artifacts/builds/my-dialect-01-task"
-cmake -S "$MYLAB_WORK" -B "$MYLAB_TASK_BUILD" -G Ninja \
-  -DMLIR_DIR="$MYLAB_LLVM/lib/cmake/mlir" \
-  -DLLVM_DIR="$MYLAB_LLVM/lib/cmake/llvm" \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_CXX_COMPILER=/usr/bin/clang++ \
-  -DCMAKE_C_COMPILER=/usr/bin/clang
-cmake --build "$MYLAB_TASK_BUILD" --target MyIncGen -j2
-rg -n 'getLeft|getLhs|getRhs' "$MYLAB_TASK_BUILD/MyOps.h.inc"
-cmake --build "$MYLAB_TASK_BUILD" --target my-opt -j2
-"$MYLAB_TASK_BUILD/my-opt" "$MYLAB_WORK/input.mlir"
-```
+这就是定义与变换的连接：**定义使一种计算具有可构造、可检查、可访问的表示；变换再根据它的含义，将这份表示改成下一阶段需要的形式。** 生成 AddOp 类承担前一项工作，不能自动替我们完成后一项。
 
-完整要求在 [lab 任务单](https://github.com/jnfkdsn/aicompiler/blob/main/llvm-mlir/my-dialect/tasks/01-rename.md)。副本不会覆盖参考版本，重复准备也不会覆盖已存在的改动。修改后记录几行：改了哪里、生成代码如何变化、原输入是否仍成立。把这些交给我审阅即可。
+当前最小工程尚未加入这条 Pattern。这里先说明它将怎样接上已有知识；后续可以在同一个例子上实现，而无需先完成自定义 Type、Attribute 和 Region 的全部机制。即使变成了 `arith.addi`，仍需后续编译路径或执行设施才能得到机器上的运行结果。
 
-本轮能沿一个字段解释 `.td → .inc → 工具行为`，就有了继续扩展的支点。下一步会把 my.add 接到已学过的 Pattern/Pass，转换为 arith.addi。
+读到这里，可以用下面两个小变化检查自己建立的关系：
 
-## 可选的一键复现
+- 将 ODS 的 lhs 改名为 left，同时更新 assemblyFormat 的对应字段引用。输入仍在第一个位置，那么生成的访问器与打印出来的 IR，分别可能发生什么变化？
+- 在一个函数中写两条 `my.add`，是不是需要登记两次 AddOp？这两条操作会共用什么，又各自保存什么？
 
-理解分步过程后，可以使用下面的快捷入口重跑参考工程：
+它们分别检验“定义字段与程序中的值”的区别，以及“一种操作与一次操作”的区别，不要求记住生成文件里的全部方法。
 
-```bash
-python3 aicompiler-labs/llvm-mlir/my-dialect/observe.py
-```
+## 实现、实践与查阅
 
-它将配置、生成/编译、打印和往返打包执行，并保存日志；本章已经逐步展示这些动作。一键脚本仍使用 `my-dialect-01`，分步命令使用 `my-dialect-01-steps`，两者读取相同源码。
+本章输入、输出和生成代码摘录对应 LLVM `llvmorg-20.1.8`。工具验证的是编译器侧的表示与约束；第 8 节的变换是后续实现目标，未记为当前工具已有功能。
 
-## 版本、复现与网页链接
+需要亲手构建时，使用 [最小工程与构建说明](https://github.com/jnfkdsn/aicompiler/tree/main/llvm-mlir/my-dialect)；想验证字段改名的预测，可做 [字段改名练习](https://github.com/jnfkdsn/aicompiler/blob/main/llvm-mlir/my-dialect/tasks/01-rename.md)。这些材料提供完整依赖、命令和源码，正文中的理解不依赖先运行实验。
 
-本篇对应 `stages/01-minimal/`；后续功能增加到新的阶段目录，避免旧教程突然指向更复杂的实现。固定 LLVM `llvmorg-20.1.8`，完整构建方法在 [lab README](https://github.com/jnfkdsn/aicompiler/blob/main/llvm-mlir/my-dialect/README.md)。
+继续查阅可以按具体问题选择：
 
-本篇站内链接由 blog 构建，源码链接指向独立的 aicompiler 仓库。`artifacts/...` 是本地复现路径，`.inc` 生成物不要求上传；正文已给出关键观察结果。两边分别提交推送后，对应 GitHub 链接才会存在。main 链接会随分支更新；正式固定版本可改用已发布 commit 的永久链接。
+- 更多字段与验证关系：[操作定义](../../compiler/ir_definition/op_definition)。
+- 文本怎样变成对象，再打印回来：[解析与打印](../../compiler/ir_definition/assembly_format)。
+- ODS 的准确字段与生成规则：[固定版本 Operations 文档](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/docs/DefiningDialects/Operations.md)。
+- 工程的生成、编译与接入：[固定版本 Creating a Dialect](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/docs/Tutorials/CreatingADialect.md)。
 
-作者验证入口为 `aicompiler-labs/llvm-mlir/docs/validate_my_dialect.py`，检查源码对应、打印往返、诊断及字段改名的影响；不将这些结果记为学习者已完成任务。
-
-机制参考：[操作定义](../../compiler/ir_definition/op_definition)、[解析与打印](../../compiler/ir_definition/assembly_format)。完整字段规范查 [ODS](https://mlir.llvm.org/docs/DefiningDialects/Operations/)，生成与链接关系查 [Creating a Dialect](https://mlir.llvm.org/docs/Tutorials/CreatingADialect/)；具体 API 以本地固定版本生成文件为准。
+若要确认注册的实现，可以从固定版本的 `Dialect::addOperations` 进入 `RegisteredOperationName::Model`：前者登记操作类型，后者把框架的解析、打印和验证入口接到该类型的方法。追到这层即可核对第五节的关系，不必为理解本章继续展开全部模板实现。
