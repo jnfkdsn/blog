@@ -1,7 +1,7 @@
 ---
 order: 2
 title: MLIR 技术文档
-updated: 2026-09-24
+updated: 2026-10-01
 excludeFromSidebar: true
 tags: [mlir, compiler, learning]
 status: draft
@@ -29,7 +29,7 @@ status: draft
 
 ## 当前阶段已展开
 
-阶段 A“认识基础 IR + 最小实验”的基础目标已完成。阶段 B 原理与小 Pass 工程已完成理解，[Pass 与 pipeline](./compiler/transforms/passes)已读完，[C++ IR API](./compiler/transforms/ir_api)的核心问题已讨论并提供观察实验；[PatternRewriter](./compiler/transforms/rewriting)重写后的主线已获肯定，配套[改写驱动](./compiler/transforms/rewrite_drivers)供深入学习。[小 Pass 教程](./tutorials/first_pass)的独立修改尚待验证。[定义 IR 抽象模块](./compiler/ir_definition/)五章均已阅读。当前改用 [my.add 增量工程](./tutorials/my_dialect/)串联生成与运行过程，第一阶段参考工程和字段改名任务已提供，学习者任务待完成。
+基础 IR 与 IR 变换章节提供了阅读表示和修改表示的基础。[my.add 导读](./tutorials/my_dialect/)建立自定义操作接入框架的整体认识；随后进入[定义 IR 抽象模块](./compiler/ir_definition/)的五章，学习字段与验证、通用语义、类型/属性、区域协议和文本往返。该模块已采用逐步解释的方式重构，clamp 示例连接定义与实际 Pattern 展开，避免再平行学习一套 my.add 机制课程。
 
 目前已有正文覆盖：
 

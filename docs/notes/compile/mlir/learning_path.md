@@ -10,7 +10,7 @@ updated: 2026-10-01
 
 ## 当前从哪里继续
 
-**当前阅读重写后的 [my.add 第一章](./tutorials/my_dialect/01_minimal_dialect)，再反馈讲解效果。** 三篇 C++ 补充已完成阅读，不再默认继续补基础。新版沿操作定义、生成代码、注册和读取一条具体 IR 展开，保留帮助理解的代码、直接工具命令和结果。现有工程保留供可选实践；其他章节尚未批量改写，代表章效果等待实际阅读反馈。
+**当前从 [IR 定义模块](./compiler/ir_definition/)继续。** my.add 导读的重写方式已获认可，本模块五章已采用同样的逐步解释方式重构，并使用技术主题式标题。my.add 只承担定义与框架接入的整体导读；后续不再并行展开另一套重复课程。新版机制章节的阅读效果与独立实践状态分别确认。
 
 
 **阶段 A“认识基础 IR + 最小 IR 实验”已完成；阶段 B 的原理与小 Pass 工程已完成理解，阶段 C 的 IR 定义五章已读完，但各机制的联系仍需建立。** [my.add 工程](./tutorials/my_dialect/)已提供，尚不能据此认定相关机制已理解。已完成基础正文阅读，并独立编写 `sum_positive.mlir`：结构、类型和两个循环状态的传递经审阅与 verifier 检查通过。计数保留 i32 是当前练习的合法选择。
@@ -52,18 +52,18 @@ MLIR 学习服务于解释和修改 AI 编译器中的表示与变换。当前�
 
 “深度”首先由能否解释语义、约束、变换前提与失败原因衡量。API 的拼写、重载和版本细节可以查阅；Op Interface 所表达的效果、类型或区域协议则需要在消费者依赖它时理解。可以暂缓其模板实现，不能忽略它对正确性的影响。
 
-## 阶段 C：从操作定义继续
+## 阶段 C：操作定义与语义契约
 
-[定义 IR 抽象](./compiler/ir_definition/)说明本模块的内部关系，五章已阅读，但解释组织仍需改进。当前先读重写后的[01：让自己的工具认识 my.add](./tutorials/my_dialect/01_minimal_dialect)，建立定义与变换的整体联系，不要求重读整组或按构建步骤学习。第一章当前只实现定义、读取与检查；普通 Pattern 展开和 Dialect Conversion 仍是后续内容。
+[定义 IR 抽象](./compiler/ir_definition/)是以下机制的主要学习入口。已经理解 [my.add 导读](./tutorials/my_dialect/01_minimal_dialect)后，可以直接从操作定义继续：它用 clamp 展示属性、验证和实际 Pattern 展开。Region 章先使用普通整数，不要求先掌握自定义类型存储；解析打印也可在操作定义后按需阅读。
 
-| 顺序 | 内容 | 当前状态 | 本次理解目标 |
+| 顺序 | 内容 | 内容定位 | 本次理解目标 |
 |---|---|---|---|
-| C1 | [一个操作是怎样被定义出来的](./compiler/ir_definition/op_definition) | 已完成阅读；作者 ODS/C++ 工程与正反例已验证 | 语义约定 → ODS → 生成 API → verifier → 注册与打印 → Pass 消费 |
-| C2 | [Trait / Interface 与通用消费者](./compiler/ir_definition/traits_interfaces) | 已阅读；工程联系通过增量项目巩固 | 效果与删除判断、范围协议、直接/外部模型及注册 |
-| C3 | [自定义 Type / Attribute](./compiler/ir_definition/types_attributes) | 已阅读；工程联系通过增量项目巩固 | 参数定义、两层验证、uniquing、checked 构造与类型相等 |
-| C4 | [Region、可变参数与验证](./compiler/ir_definition/regions_assembly) | 已阅读；区域扩展留到后续项目阶段 | 入口/出口对应、隔离与验证顺序 |
-| C5 | [解析与打印](./compiler/ir_definition/assembly_format) | 已阅读；本轮观察生成 parser/printer | 文本字段 → OperationState → 验证 → 打印往返 |
-| C6 | Dialect Conversion | 后续模块，待编写；先完成 my.add 普通 Pattern 贯通 | legality、类型转换与函数/区域边界衔接 |
+| C1 | [操作定义：语义、字段与验证](./compiler/ir_definition/op_definition) | clamp 的定义、构造与实际展开 | 语义约定 → 字段 → verifier → builder → Pattern 消费 |
+| C2 | [通用语义：Trait 与 Interface](./compiler/ir_definition/traits_interfaces) | 范围查询与效果事实的消费 | 协议 → 实现 → 查询 → 决定，直接与外部接入 |
+| C3 | [自定义 Attribute 与 Type](./compiler/ir_definition/types_attributes) | 计算参数与结果保证 | 分层验证、类型身份、checked 构造与转换需求 |
+| C4 | [Region 操作](./compiler/ir_definition/regions_assembly) | 普通整数到多结果的区域协议 | 入口/出口对应、隔离、分阶段验证与分析边界 |
+| C5 | [解析与打印](./compiler/ir_definition/assembly_format) | 同一个对象的两种文本入口 | 文本字段 → OperationState → 验证 → 打印往返 |
+| C6 | Dialect Conversion | 后续模块，待编写；不等待另一个 my.add 系列 | legality、类型转换与函数/区域边界衔接 |
 
 C1 的观察入口为 `aicompiler-labs/llvm-mlir/05-op-definition/`。可按需回查自定义/通用打印、builder 构造与验证结果。C2—C5 共用 `aicompiler-labs/llvm-mlir/06-ir-definition/`，观察脚本按章展示查询、清理、类型身份和区域结构。完整 RegionBranch 模型、多组 variadic 实现、自定义高级存储等继续留作进阶范围，见模块总览与覆盖表。
 

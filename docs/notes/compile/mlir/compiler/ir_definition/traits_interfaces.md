@@ -1,95 +1,42 @@
 ---
 order: 2
-title: Trait 与 Interface：让通用代码理解操作
-updated: 2026-09-14
+title: 通用语义：Trait 与 Interface
+updated: 2026-10-01
 ---
 
-# Trait 与 Interface：让通用代码理解操作
+# 通用语义：Trait 与 Interface
 
-上一章的 `lab.clamp` 已经能被读取、构造、验证，还能由专用 Pattern 展开。不过，编译器里大量代码并不认识 `lab.clamp`：通用死代码删除不应为每个方言增加一个操作名单，区间分析也不应逐一硬编码所有带范围信息的操作。
+上一章的展开 Pattern 直接匹配 `lab.clamp`，知道它的上下界存在哪两个属性里。专用变换这样写很自然，但编译器还有大量需要处理不同方言的通用代码：判断操作能否删除、查询结果范围、分析区域之间的数据传递。
 
-这一章沿着两个决策展开：**一个没有用户的操作能否删除；一个不认识操作名字的消费者怎样获得结果范围。** 前者使用已有的效果接口，后者实现一个小接口。最终要看清的是操作定义怎样把语义事实交给通用代码使用。
+如果每个消费者都维护所有操作的名字与字段，增加一个新操作就可能需要修改许多地方。本章从“查询 clamp 的结果范围”出发，说明怎样把语义事实交给通用代码；随后再用死代码删除观察现成协议如何影响优化。
 
-## 1. 两个结果都没人用，为什么只删除一个
+## 1. 通用消费者与语义事实
 
-先沿用上一章的有符号 i32 闭区间限制。下面两种操作约定相同的计算：小于 -4 返回 -4，大于 7 返回 7，否则返回输入。`lesson.opaque_clamp` 是本章特意定义的另一种表示，它有输入、属性、结果及上下界验证，但没有声明效果或推测执行信息。
+对于 `clamp(x, -4, 7)`，即使不知道 x，也知道任何合法执行的结果都落在 `[-4, 7]`。假设后续代码判断结果是否小于 100，这个范围足以支持“比较恒为真”的推导。
 
-<!-- irdef-example: interfaces-input -->
-```text
-module {
-  func.func @unused(%x: i32) {
-    %a = lab.clamp %x bounds(-4, 7) : i32
-    %b = "lesson.opaque_clamp"(%x) <{lower = -4 : i32, upper = 7 : i32}> : (i32) -> i32
-    return
-  }
-}
-```
+消费端真正需要的是结果的上下界，并不一定需要知道操作叫 clamp，也不需要知道上下界保存为两个属性还是一个复合属性。因此可以先约定一个问题：
 
-手工分析很容易：两项计算的结果都没有使用者；这些标量计算不写内存、不发出 I/O，也没有合法输入上的额外可观察行为，删除它们不改变函数的可观察结果。
+> 对具有单一整数含义结果的操作，查询一个可靠的静态有符号闭区间。所有有定义执行的结果都在其中，区间不必是最紧的估计。
 
-通用代码面对的事实却更少。它可以遍历 use-list，确认两项结果都无人使用；仅凭 Operation 的输入、结果和属性，它看不出操作是否打印日志、更新设备状态，或做了别的事情。因此，**“没有 use”只能解决计算结果是否有用，不能解决执行这个操作是否有用。**
+这是一项语义契约。某个操作返回 `[-4, 7]`，就承诺其输出不会超出该范围；没有这种信息的操作可以被当前消费者视为未知。
 
-配套工具先调用 `isOpTriviallyDead` 报告判断，再运行 `canonicalize`。先只看报告中的 `dead` 字段（下面摘录这一列）：
+整个协作过程是：
 
 ```text
-lab.clamp            dead=1
-lesson.opaque_clamp  dead=0
+消费者需要结果范围
+  → 询问操作是否支持这项查询
+  → 调用统一的上下界方法
+  → 操作自己的实现从字段中取得答案
+  → 消费者使用答案作决定
 ```
 
-实际清理后的函数仍含有 `lesson.opaque_clamp`，`lab.clamp` 已消失。`dead=0` 表示工具在这里没有证明它是可平凡删除的死操作；它不表示数学上已经证明该操作有副作用。
+MLIR 的 Interface 用来表达这类公共协议。我们先实现一个只返回两个整数的接口，把一次查询完整走通。
 
-为什么已有的 `lab.clamp` 能被识别？上一章在 ODS 中给了它 `Pure`。
+## 2. Op Interface 的定义与实现
 
-## 2. 从 Pure 走到删除决定
+### 2.1 查询协议
 
-在本工作区使用的 MLIR 中，`Pure` 组合了 `NoMemoryEffect` 和 `AlwaysSpeculatable`。它向基础设施提供两类不同的信息：
-
-| 信息 | 消费者能据此询问什么 |
-|---|---|
-| 无内存效果 | 该操作报告哪些内存读写、分配、释放效果？对于这里的 clamp，集合为空 |
-| 总是可以推测执行 | 将本来可能不执行的计算提前执行，是否会引入禁止的行为？这里所有合法 i32 输入的 clamp 都有定义 |
-
-这些是操作作者依据语义作出的承诺。ODS 不会分析一段未来的机器代码，再证明声明属实。若把写设备状态的操作错误标成无效果，结构 verifier 可能通过，优化却会错误删除它。
-
-本例的删除决策可以逐步还原：
-
-1. 检查 `lab.clamp` 的所有结果，没有 use。
-2. 它不是必须保留的 terminator 等结构性操作。
-3. 查询内存效果接口，得到空效果集合。
-4. 这条操作满足这里的平凡死代码条件，清理过程可以删除它。
-
-对 `lesson.opaque_clamp`，第 3 步无法取得效果模型，工具走保守路径，保留操作。
-
-这里有一个容易混淆的边界：**本例的平凡 DCE 判断并不是先调用 `isPure`，也不是要求同时通过一项 speculation 检查。** `isOpTriviallyDead` 检查 use，再调用处理效果与结构边界的辅助逻辑。它还处理某些读、分配及递归效果情形，不能把完整算法缩写成“所有非 Pure 操作都不能删除”。
-
-`AlwaysSpeculatable` 在移动计算、把条件执行变成无条件执行等决策中另有作用。例如，除法结果无人使用和把除法提前到分支外是两个不同问题；后者可能让原来不会遇到的非法除数被执行。学习接口时应始终把“提供的事实”和“当前消费者的决策”分开。
-
-## 3. Trait 与 Interface 分别填补哪一层信息
-
-现在回头看两种扩展机制，就有了具体用途。
-
-**Trait 把一项共性附着到操作定义上。** 比如 `SingleBlock` 约束区域的 Block 结构，`IsolatedFromAbove` 约束区域向外捕获 SSA 值。一个 trait 可以包含验证逻辑和共享方法；它不只是没有行为的标签。通用代码可通过 `hasTrait<...>()` 查询某类共性。
-
-**Interface 定义一套消费者可以调用的协议。** 比如 `MemoryEffectOpInterface` 的消费者能请求效果集合，每种操作用自己的数据回答。通用代码拿到的是接口视图，不必知道该操作具体属于哪个方言。
-
-两者不是互斥选项。ODS 会通过 trait 形式将接口接入生成的操作类，`Pure` 本身又是若干已有能力的组合。设计时最有用的区别是：
-
-- 若要复用同一项结构约束或共享实现，先考虑 trait。
-- 若消费者需要向不同对象提出同一个问题，并得到对象相关的回答，先考虑 interface。
-
-不要据此认为 trait 只能回答“是/否”，或 interface 一定涉及复杂虚函数代码。我们接下来只让一个接口返回两个整数。
-
-## 4. 先规定范围问题，再定义接口
-
-假设后续分析想知道操作的结果范围。例如，它看到一个结果与常量 100 作有符号小于比较，如果结果保证位于 `[-4, 7]`，便具备了将比较判为真的一项事实。
-
-这个消费者需要的契约是：
-
-> 对一个具有单一整数含义结果的操作，返回一个静态、闭合、可靠的有符号范围；所有有定义执行得到的结果都落在这个范围中。边界不要求是最紧的估计。
-
-本例只为单个具有整数含义的结果提供已知范围；取得接口后，两项查询都必须有可靠答案。没有这项能力的操作由消费者识别为未知。
-
-协议确定之后，ODS 才有东西可以声明：
+用 ODS 定义 `StaticBounds`：
 
 <!-- source-example: bounds-interface -->
 ```text
@@ -102,11 +49,13 @@ def StaticBounds : OpInterface<"StaticBounds"> {
 }
 ```
 
-这段定义生成 `lesson::StaticBounds` 接口类以及实现模型所需的结构。它尚未让任何操作自动获得上下界。还需要分别提供“每个操作怎样回答”和“哪个消费者来问”。
+这段定义规定两个方法的名字、返回类型和用途，生成接口类及接入结构。它没有提供上下界数值；不同操作需要根据自身语义实现这些方法。
 
-## 5. 在操作中实现，再走完一次查询
+这里使用有符号 `int64_t` 容纳本例 i32 的上下界。若要覆盖任意位宽、多结果或运行时范围，协议本身还需要重新设计，不能只换几个操作名就认为通用范围分析已经完成。
 
-先在自己维护的操作中实现协议。我们定义 `lesson.clamp`，计算语义、输入、上下界属性和结果都沿用上一章的 `lab.clamp`，只增加范围接口。这一步不需要自定义类型。
+### 2.2 操作提供答案
+
+为避免修改已有的基础实验，我们用 `lesson.clamp` 表示同一项整数区间计算，并在定义中增加接口。`lab` 与 `lesson` 是两个教学方言；这里的区别只用于观察扩展方式，不表示计算改变了。
 
 <!-- source-example: direct-op -->
 ```text
@@ -118,7 +67,7 @@ def ClampOp : Op<Lesson_Dialect, "clamp", [Pure, DeclareOpInterfaceMethods<Stati
 }
 ```
 
-`DeclareOpInterfaceMethods<StaticBounds>` 将接口接到操作类，并生成两项方法的声明。生成器知道消费者可以调用什么，但怎样从字段中得到答案，要由操作实现：
+新增的 `DeclareOpInterfaceMethods<StaticBounds>` 将协议接到操作上，并声明待实现的方法。原来的字段、结果和上下界验证仍然保留：
 
 <!-- source-example: direct-methods -->
 ```cpp
@@ -131,9 +80,13 @@ int64_t ClampOp::getMinimum() { return getLowerAttr().getInt(); }
 int64_t ClampOp::getMaximum() { return getUpperAttr().getInt(); }
 ```
 
-前面的 verifier 保证上下界有序。后面两个方法读取已经验证的 i32 属性，返回带符号整数。这里能直接把属性当作结果范围，是因为 clamp 的计算语义保证输出不会超出上下界；换一种操作，就必须重新证明答案可靠。
+两个查询方法读取上下界属性。能直接把属性值作为结果范围，依据是 clamp 的计算语义：小于下界时返回下界，大于上界时返回上界，其他情况返回区间内的输入。对于别的操作，即使也有名为 lower 和 upper 的属性，也必须重新确认它们是否意味着输出范围。
 
-现在给这个操作一个具体输入模块：
+到这里已有协议和实现，还需要一个真正使用它们的消费者。
+
+## 3. 接口查询与调用过程
+
+先用一个完整程序确定被查询的对象：
 
 <!-- irdef-example: direct-input -->
 ```text
@@ -145,7 +98,7 @@ module {
 }
 ```
 
-消费端的核心代码如下，`op` 是当前遍历到的 `Operation *`：
+消费端在遍历到一个 `Operation *op` 后，执行：
 
 <!-- source-example: consumer -->
 ```cpp
@@ -155,21 +108,89 @@ else
   llvm::errs() << " bounds=unknown";
 ```
 
-`dyn_cast` 在这里尝试取得接口；成功后调用统一方法，失败则报告未知。消费端没有 `if (isa<lesson::ClampOp>(op))`，也没有直接读取名为 `lower` 的属性。这样才能容纳用其他字段保存相同事实的操作。
+`dyn_cast` 尝试取得这个操作的接口视图；成功后通过统一方法取值，失败则输出 unknown。注意消费端没有把 op 转成 `lesson::ClampOp`，也没有自行搜索 lower 属性。
 
-对这份输入，报告工具实际给出：
+对于本例，工具实际报告中包含 `bounds=[-4,7]`。把调用过程放回具体对象：
 
+| 步骤 | 当前发生的动作 |
+|---|---|
+| 取得接口 | `lesson.clamp` 已声明支持 StaticBounds |
+| 查询下界 | 接口分派到 `ClampOp::getMinimum()` |
+| 读取字段 | lower 属性保存 -4，方法返回 -4 |
+| 查询上界 | `getMaximum()` 从 upper 属性取得 7 |
+| 消费结果 | 报告程序打印 `[-4,7]` |
+
+当前工程实现的是查询和报告。前面“与 100 比较恒为真”是说明消费者用途的语义推演，尚未在这个报告 Pass 中实现比较折叠。
+
+如果后来有另一种操作通过不同字段计算出可靠范围，它可以实现相同接口，消费代码无需随字段布局改变。这正是定义协议的意义：操作负责提供事实，消费者负责把事实用于自己的算法。
+
+## 4. Trait 与共享操作约束
+
+Interface 面向“可以向不同操作提出什么问题”。另一类需求是让许多操作共同遵守同一种结构约束，例如某个区域必须只有一个 Block。重复编写这一检查并没有帮助，MLIR 因此也提供 Trait 来复用共性、方法和验证。
+
+例如 `SingleBlock` 可以附着到不同的区域操作上，使它们共享单 Block 的结构要求。`IsolatedFromAbove` 表达禁止某类外部 SSA 捕获的约束；这些约束的具体作用会在 Region 章通过输入与区域参数说明。
+
+两种机制在设计上的关注点可以这样区分：
+
+| 需求 | 使用方式 |
+|---|---|
+| 多个操作共享某种约束或实现 | 附加合适的 Trait |
+| 通用消费者需要对象相关的答案 | 通过 Interface 调用操作提供的方法 |
+
+Trait 可以包含方法和验证逻辑，不能仅理解成一个标签；Interface 也可能提供默认实现。在 ODS 中，接口接入本身会以 trait 的形式出现，因此它们不是互斥的两个列表。先从需求判断它们各自承担什么，比先研究模板继承关系更有帮助。
+
+上一章定义里出现的 `Pure` 就组合了现有能力。下面用它观察通用消费者真正作出一次删除决定。
+
+## 5. 内存效果与死代码删除
+
+### 5.1 未使用结果的删除条件
+
+下面两种操作约定相同的 clamp 计算，但 `lesson.opaque_clamp` 没有声明内存效果与推测执行信息：
+
+<!-- irdef-example: interfaces-input -->
 ```text
-lesson.clamp effect_interface=1 speculatable=1 dead=0 bounds=[-4,7]
+module {
+  func.func @unused(%x: i32) {
+    %a = lab.clamp %x bounds(-4, 7) : i32
+    %b = "lesson.opaque_clamp"(%x) <{lower = -4 : i32, upper = 7 : i32}> : (i32) -> i32
+    return
+  }
+}
 ```
 
-沿一次调用追踪：Pass 遍历到 `lesson.clamp` → `dyn_cast` 取得它支持的 StaticBounds 接口 → 调用接口方法 → 分派到 ClampOp 成员函数 → 读出 lower、upper → 消费者得到 `[-4,7]`。结果被 return 使用，所以 `dead=0`；这不影响范围查询。
+两项结果都没有使用者。人知道它们只是比较并选择整数，因此可以删除；通用优化只看到两个不被使用的结果，却还不知道操作是否写内存或输出日志。
 
-到这里，协议、实现、消费者和实际回答已经接起来。之后新增一个用其他字段保存范围的操作，只需提供满足相同协议的实现，报告程序便可继续使用。
+这里缺少的事实是执行本身是否有需要保留的效果。`lab.clamp` 的 `Pure` 包含 `NoMemoryEffect`，通过内存效果接口报告空效果集合。对这个例子，`isOpTriviallyDead` 的决定可以按以下过程理解：
 
-## 6. 当操作属于另一个组件时，补上外部模型
+```text
+结果无人使用
+  → 排除 terminator 等不能按普通死操作删除的结构
+  → 查询效果，确认没有需要保留的行为
+  → 可以删除 lab.clamp
+```
 
-刚才可以直接修改自己维护的 `lesson.clamp`。现在换一个条件：要让上一章独立工程中的 `lab.clamp` 也支持查询，但不希望基础方言反过来依赖这个工具的范围接口。此时把实现放在工具侧，通过外部模型接入：
+`lesson.opaque_clamp` 没有提供相应效果模型，工具采取保守处理，保留它。实际报告中的 dead 字段为：
+
+```text
+lab.clamp            dead=1
+lesson.opaque_clamp  dead=0
+```
+
+运行 canonicalize 后，前者被清理，后者仍在。这里的 dead=0 表示未能证明它可被平凡删除，不表示证明了它一定有副作用。
+
+### 5.2 无效果与推测执行
+
+`Pure` 在当前版本组合 `NoMemoryEffect` 与 `AlwaysSpeculatable`。后者涉及另一项决定：把原本可能不执行的计算提前执行，是否会引入不允许的行为。
+
+例如某个除法原来位于不会进入的分支中，提前计算可能遇到非法除数。它与“结果无人使用时是否删除”不是同一个问题。本例的平凡 DCE 判断并不要求调用 `isPure` 或额外执行 speculation 检查；完整算法还处理某些读、分配和递归效果情形，不能归纳成“只有 Pure 才能删除”。
+
+这些声明必须由真实语义支持。若把写设备状态的操作错误声明为无效果，结构 verifier 未必发现错误，但优化可能据此删除必要行为。接口使消费者能够使用事实，事实是否可靠仍是操作作者的责任。
+
+## 6. 外部接口模型
+
+现在已有两种独立信息：效果信息影响删除，范围信息回答数值范围。再改变一个条件：希望原来 `lab.clamp` 也支持范围查询，但不让基础方言依赖本教学工具的 StaticBounds 接口。
+
+可以把实现放在工具侧，用外部模型接入：
 
 <!-- source-example: external-model -->
 ```cpp
@@ -179,9 +200,7 @@ struct ClampBoundsModel : lesson::StaticBounds::ExternalModel<ClampBoundsModel, 
 };
 ```
 
-模型拿到原始操作，从已经验证的 i32 属性中读取带符号整数。模型的方法多了 `Operation *` 参数，是因为这次实现不放在 `ClampOp` 成员函数中；接口调用的底层分派会把目标对象交给模型。
-
-随后把模型接到使用它的 Context：
+模型仍读取同一份属性，只是方法不再写在操作类内部，所以显式接收待查询的 `Operation *`。再通过 registry extension，在 Lab dialect 加载时附加它：
 
 <!-- source-example: attach -->
 ```cpp
@@ -190,53 +209,25 @@ registry.addExtension(+[](MLIRContext *context, lab::LabDialect *) {
 });
 ```
 
-这里的 registry extension 会在相关 dialect 加载时应用。把注册封装在 registry 中，工具不必猜测 Lab dialect 何时首次加载。**接口模型的可用性与 Context 的注册状态有关**，并不是链接进一个 `.cpp` 后，所有 Context 就自动知道该接口。
+这个动作把模型接到相应 Context 中，单纯编译一个模型类还不够。对于同一份 `lab.clamp` 输入，两个工具配置得到：
 
-配套工程从同一份源码构建两个工具：一个添加扩展，一个不添加。它们读取完全相同的 `interfaces.mlir`，查询同一个 `lab.clamp`：
-
-| 工具配置 | 范围查询 | 平凡死代码判断 |
+| 配置 | 范围报告 | 本例 DCE 判断 |
 |---|---|---|
 | 注册外部范围模型 | `bounds=[-4,7]` | `dead=1` |
-| 不注册外部范围模型 | `bounds=unknown` | `dead=1` |
+| 未注册外部范围模型 | `bounds=unknown` | `dead=1` |
 
-范围信息缺失并没有改变已有的效果声明，所以本例 DCE 的结果不受影响。这个对照说明：不同消费者使用不同协议，添加一个范围接口不会自动修改所有优化的行为。
+没有范围模型时，已有的效果信息仍然存在，所以 DCE 判断没有变化。这个对照也说明：接口不是“添加后所有优化自动变聪明”的开关；必须有消费者真正查询并使用它。
 
-直接实现把方法放在操作类中；外部模型把方法放在另一个组件中，再接到 Context。两种方式最终供同一个消费者调用。外部模型仍必须遵守原操作语义，不能通过新增接口改变计算含义。
+直接实现与外部模型供同一个协议消费。实际开发中先掌握直接实现即可，遇到组件依赖或无法修改原操作时，再采用外部接入。
 
-## 阅读后的一个小推演
+## 理解检查
 
-先不运行程序，考虑把 `lab.clamp` 的结果返回给函数调用者：范围报告会怎样变化，`dead` 又会怎样变化？应当是范围仍为 `[-4,7]`，但 use 不再为空，`dead` 变成 0。反过来，只移除外部范围模型，会失去哪条信息，又保留哪条信息？
+把第 5 节 `lab.clamp` 的结果作为函数返回值，范围仍是 `[-4,7]`，但它不再是未使用结果。解释范围查询为何仍成立、删除判断为何改变。再设想一个错误模型返回 `[0,7]`：输入 -9 时，哪项语义事实会被违反？
 
-能够解释这两个变化，就已抓住本章主题：**操作提供受语义约束的事实，消费者将它与当前 IR 状态结合，再作具体决定。** 下一章[自定义 Type 与 Attribute](./types_attributes)从操作字段继续深入，解释范围本身怎样成为可构造、验证和复用的数据对象。
+下一章[自定义 Attribute 与 Type](./types_attributes)把注意力转向事实如何保存在 IR 中：区间可以是一组计算参数，也可以成为附着在结果上的类型保证，两者服务不同用途。
 
-<details>
-<summary>延伸查阅：其他接口与模型注册边界</summary>
+## 实现与深入范围
 
-常用接口可以按消费者来理解，而不是按名字背诵：
+代码与查询、删除对照基于 LLVM `llvmorg-20.1.8`，完整实现见[IR 定义工程](https://github.com/jnfkdsn/aicompiler/tree/main/llvm-mlir/06-ir-definition)。本例实现 Op Interface；Type/Attribute Interface、类型推导、区域控制流和 bufferization 协议在对应主题中继续展开。当前的 unknown 回退是报告程序的策略，不意味着所有消费者都允许所需接口缺失。
 
-| 消费者需要作的决定 | 相关协议 | 仍需额外理解的内容 |
-|---|---|---|
-| 从输入和静态信息构造结果类型 | `InferTypeOpInterface` | 推导如何失败，显式结果类型怎样检查兼容性 |
-| 穿过结构化区域传播数据流 | `RegionBranchOpInterface` | 哪些区域可能先后执行，边上的值怎样映射 |
-| 判断张量操作可否复用存储 | `BufferizableOpInterface` | 读写、别名及分析得到的冲突 |
-| 查询某类自定义类型的公共性质 | Type Interface | 查询对象变成 Type，模型返回类型参数相关事实 |
-| 查询某类静态数据的公共性质 | Attribute Interface | 查询对象变成 Attribute，与所属 Op 分开 |
-
-本章已实现的是 Op Interface 的直接/外部接入及消费。Type/Attribute Interface 共享协议与模型的思路，但其具体生成、注册代码不在本例中；bufferization 和区域分析的协议随相应机制深入。这样区分是为了知道可迁移的原理，以及还需实际补做的实现。
-
-范围报告仅查询边界，没有实现比较折叠。完整范围分析还需要处理未知状态、多结果、位宽和溢出。某些消费者要求模型必须存在，或用 promised interface 诊断遗漏；本章报告程序采用的 unknown 回退不代表所有接口都允许缺失。
-
-</details>
-
-## 配套观察与依据
-
-观察入口：`aicompiler-labs/llvm-mlir/06-ir-definition/README.md`。执行 `observe.py` 会显示原 IR、两种注册配置的报告及清理后的 IR；不需要先运行才能阅读本章。实现使用 LLVM `llvmorg-20.1.8`，复用上一章 Lab dialect，未修改原实验。
-
-固定版本源码入口：
-
-- [SideEffectInterfaces.td](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/include/mlir/Interfaces/SideEffectInterfaces.td)：Pure 的组合与效果/推测执行协议。
-- [SideEffectInterfaces.cpp](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/lib/Interfaces/SideEffectInterfaces.cpp)：`isOpTriviallyDead`、效果处理及保守分支。
-- [Interfaces.md](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/docs/Interfaces.md)：接口模型、外部模型及 Context 注册。
-- [Traits.md](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/docs/Traits.md)：共享 trait 的方法与验证。
-
-本章的删除与模型对照由 `docs/validate_ir_definition.py` 回归；这里只验证编译器侧行为，未执行自定义操作的机器码。
+固定版本的 [Interfaces 文档](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/docs/Interfaces.md)和 [Traits 文档](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/docs/Traits.md)用于确认接入方式；[SideEffectInterfaces.cpp](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/lib/Interfaces/SideEffectInterfaces.cpp)用于核对平凡死代码判断的具体分支。

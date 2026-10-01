@@ -1,62 +1,55 @@
 ---
 order: 4
-title: 定义带 Region 的操作：传值、隔离与验证
-updated: 2026-09-14
+title: Region 操作：执行协议、传值与验证
+updated: 2026-10-01
 ---
 
-# 定义带 Region 的操作：传值、隔离与验证
+# Region 操作：执行协议、传值与验证
 
-到这里已经能定义一项标量计算、给它自己的类型和属性，并让通用代码查询它的能力。但真实方言经常定义含有一段计算的操作：函数、循环、分支、设备执行区域都有 Region。
+前面的 clamp 把一项标量计算表达为操作。函数、循环和设备执行区域还需要容纳一段内部程序：操作不仅有输入和结果，也拥有 Region。
 
-本章把前一章的范围限制放进一个 `lesson.scope`，逐步规定输入如何进入、结果如何传出，以及 verifier 应怎样检查。**Region 只提供容器；完整操作定义必须补上执行与传值协议。**
+本章定义一个教学用的 `lesson.scope`，用来包装并执行一次内部计算。重点是确定四件事：什么时候进入区域、输入怎样绑定、结果怎样返回，以及哪些结构与引用合法。例子先使用普通 i32，类型与属性的自定义存储不参与这条主线。
 
-## 1. 把计算放进区域，先写出四组值的对应
+## 1. 区域语义与数据传递
 
-我们为 `lesson.scope` 规定一个很小的语义：进入一次区域，执行其中唯一 Block 一次，然后把 `lesson.yield` 的值作为父操作结果传出。输入按位置绑定到 Block 参数，结果按位置对应 yield 的 operand。区域不能隐式捕获外面的 SSA 值。
+我们为 scope 约定：它有一个非空 Region，其中恰好一个 Block；进入时将输入按位置绑定到 Block 参数，执行其中的计算，最后把 `lesson.yield` 的值传给父操作结果。它不允许内部直接捕获外部 SSA 值。
 
-下面先看 `scope.mlir` 的第一个函数片段，完整文件还包含多结果与空结果变体：
+下面把已经熟悉的 clamp 放进去：
 
+<!-- irdef-example: scope-basic -->
 ```text
-func.func @clip_inside(%x: i32) -> !lesson.range<-4, 7> {
-  %r = "lesson.scope"(%x) ({
-  ^bb0(%local: i32):
-    %clipped = lesson.limit %local bounds(#lesson.bounds<-4, 7>) : !lesson.range<-4, 7>
-    lesson.yield %clipped : !lesson.range<-4, 7>
-  }) : (i32) -> !lesson.range<-4, 7>
-  return %r : !lesson.range<-4, 7>
+module {
+  func.func @clip_inside(%x: i32) -> i32 {
+    %r = "lesson.scope"(%x) ({
+    ^bb0(%local: i32):
+      %clipped = lab.clamp %local bounds(-4, 7) : i32
+      lesson.yield %clipped : i32
+    }) : (i32) -> i32
+    return %r : i32
+  }
 }
 ```
 
-通用格式中的括号要按结构读：`(%x)` 是操作的 operand 列表；`({ ... })` 包含它拥有的 Region；末尾函数式类型写操作的输入与结果类型，不是区域本身的函数声明。
+通用语法的 `(%x)` 是 scope 输入列表，`({ ... })` 包含它的 Region，末尾 `(i32) -> i32` 描述父操作的输入和结果类型。
 
-假设输入是 12，按我们规定的语义，值的流动是：
+假设函数输入为 12，按我们规定的执行语义，值的传递为：
 
-| 位置 | 此次对应值 | 关系 |
-|---|---|---|
-| scope 的 operand `%x` | 12 | 外部计算交给操作的输入 |
-| 入口参数 `%local` | 12 | 进入区域时按位置绑定 |
-| yield 的 operand `%clipped` | 7 | 区域内 clamp 的计算结果 |
-| scope 的 result `%r` | 7 | 退出时按位置接收 yield 传出的值 |
+| 位置 | 数值 | 在 IR 中的角色 |
+|---|---:|---|
+| `%x` | 12 | 父操作的输入引用 |
+| `%local` | 12 | 内部 Block 的入口参数 |
+| `%clipped` | 7 | 区域内 clamp 的结果，也是 yield 的输入 |
+| `%r` | 7 | 父操作结果，随后交给 return |
 
-这张表是语义推演；本工程尚未提供 scope 的执行器或 lowering。parser 不会执行该表，verifier 也不会计算输入 12 的结果。
+这四个名字对应不同的 Value。入口与出口处的数值联系来自 scope 的执行约定，不是因为这些 Value 自动互为别名。
 
-`%x` 与 `%local` 是不同的 Value：前者定义在函数入口，后者定义在 scope 的入口。`%clipped` 与 `%r` 同样不同，分别是内部计算和外部父操作的结果。传值关系来自操作的协议，并不是四个名字自动互为别名。
+这张表是语义推演。当前工程能够解析和验证这种表示，但尚未提供 scope 的执行器或 lowering；读取文本不会实际执行表中的计算。
 
-## 2. 为什么不能从“含一个 Region”推出这些规则
+## 2. Region 结构与 ODS 定义
 
-`scf.for` 会重复执行 body，`scf.if` 选择区域，函数定义的 Region 并不在定义出现时直接执行。同样一个容器结构可以承载不同的执行协议。
+Region 本身提供容器，不规定执行次数或输入输出绑定。`scf.for` 可以重复执行内部区域，`scf.if` 选择分支，函数体则在调用时执行。我们给 scope 规定执行一次，需要在定义与后续实现中保持这项约定。
 
-本例至少需要明确这些约定：
-
-- body 必须存在且只有一个 Block；我们不允许声明式空 Region。
-- scope operand 与入口 Block 参数的数量、顺序和类型一致。
-- 最后一项操作必须是 `lesson.yield`。
-- yield operand 与父操作结果的数量、顺序和类型一致。
-- 区域中的 SSA 外部依赖通过 scope operand 显式传入。
-
-注意我们没有要求“所有输入类型等于所有结果类型”。主例输入 i32，输出 RangeType；区域本来就能执行改变表示的计算。把 `SameOperandsAndResultType` 加到这个操作上，会错误排除合法主例。
-
-从契约再写 ODS，才能知道哪些约束可以复用，哪些必须自己实现：
+操作声明如下：
 
 <!-- source-example: scope-ops -->
 ```text
@@ -73,85 +66,35 @@ def YieldOp : Op<Lesson_Dialect, "yield", [Pure, Terminator, HasParent<"ScopeOp"
 }
 ```
 
-yield 的 `assemblyFormat` 使用 optional group：非空 values 是锚点，有值时打印值与类型，空列表则省略整个分组，得到裸 `lesson.yield`。
+`regions` 声明一个名为 body 的 Region；`Variadic<AnyType>` 分别声明一组输入和一组结果。本例的组长度为一，稍后可以变成零或多个。AnyType 表示不把元素类型固定为 i32，入口和出口的对应关系仍由 verifier 检查。
 
-这里 `SingleBlock` 提供单 Block 结构约束，`IsolatedFromAbove` 限制跨区域捕获；`Terminator` 标明 yield 在 Block 中的结构角色，`HasParent` 要求它出现在 ScopeOp 中。具体的入口/出口类型对应，仍需要手写检查。
+`SingleBlock` 限制 Region 的 Block 数量；本版本该 trait 允许零或一个 Block，所以本操作还要补充“body 非空”的检查。`IsolatedFromAbove` 禁止相应的外部 SSA 捕获。
 
-`RecursiveMemoryEffects` 告诉效果处理代码继续考察内部操作。不能因为外层只是容器，就宣称内部任意计算都无效果。yield 自身声明 Pure，表示它不引入额外内存效果等；`Terminator` 仍要求维护其结构职责，不能看到其结果无人使用就单独删除这个出口。
+`lesson.yield` 是区域的出口。`Terminator` 给它 Block 终结操作的结构角色，`HasParent<"ScopeOp">` 限制其所在父操作。即使 yield 没有普通结果，它也不能像无用的算术操作一样被删除，否则区域将失去约定的出口。
 
-## 3. 可变数量意味着一组值，不是一个特殊 Value
+这些结构设施让框架能够检查 IR 的形状；“进入一次、按位置绑定、按位置传出”仍是 scope 的语义协议，需要后续执行或 lowering 落实。
 
-ODS 中 `Variadic<AnyType>:$inputs` 表示名为 inputs 的一组 operand，运行时长度可为零或更多。生成访问器返回一段范围，不是一个能容纳列表的特殊 SSA Value。outputs 与 yield values 也各自是一组。
+## 3. 入口验证与区域验证
 
-因此，交换两个输入可以写成：
+### 3.1 入口参数对应
 
-```text
-%r:2 = "lesson.scope"(%x, %y) ({
-^bb0(%a: i32, %b: i64):
-  lesson.yield %b, %a : i64, i32
-}) : (i32, i64) -> (i64, i32)
-```
-
-`%r:2` 为两个结果提供打印名称；它们仍是两个独立的 OpResult。yield 的第 0 项交给 `%r#0`，第 1 项交给 `%r#1`。这里故意使用不同类型，让错误地调换位置更容易暴露。
-
-当三组列表都为空，区域依然可以有一个 Block 和一个不传值的 yield。**空参数、空结果与空 Region 是不同情况。** 完整合法文件包含这三个变体：
-
-<!-- irdef-example: scope-input -->
-```text
-module {
-  func.func @clip_inside(%x: i32) -> !lesson.range<-4, 7> {
-    %r = "lesson.scope"(%x) ({
-    ^bb0(%local: i32):
-      %clipped = lesson.limit %local bounds(#lesson.bounds<-4, 7>) : !lesson.range<-4, 7>
-      lesson.yield %clipped : !lesson.range<-4, 7>
-    }) : (i32) -> !lesson.range<-4, 7>
-    return %r : !lesson.range<-4, 7>
-  }
-  func.func @swap(%x: i32, %y: i64) -> (i64, i32) {
-    %r:2 = "lesson.scope"(%x, %y) ({
-    ^bb0(%a: i32, %b: i64):
-      lesson.yield %b, %a : i64, i32
-    }) : (i32, i64) -> (i64, i32)
-    return %r#0, %r#1 : i64, i32
-  }
-  func.func @empty() {
-    "lesson.scope"() ({
-      lesson.yield
-    }) : () -> ()
-    return
-  }
-}
-```
-
-本章输入侧只有一组 variadic，结果侧也只有一组，各自的分组没有歧义。如果操作输入有两组可独立变化的列表，例如 `sources` 与 `destinations`，单凭总 operand 数量无法恢复分界：三个值可能按 1+2 分，也可能按 2+1 分。
-
-此时通常需要 `AttrSizedOperandSegments` 记录各组长度，或在语义确实要求各组等长时使用 `SameVariadicOperandSize`。示意布局：
+已有一个 i32 的 scope 输入，并不足以保证区域里恰好声明了一个 i32 参数。可以误写为 i64，也可以多写一个参数。因此需要检查两条序列：
 
 ```text
-operand 列表：[src0, dst0, dst1]
-分段长度：    [1,    2]
+scope 的输入类型序列 == 入口 Block 的参数类型序列
 ```
 
-optional operand 也存在这个问题，因为它的数量可能是 0 或 1；optional attribute 不占 SSA operand 槽位，是另一类字段。固定参数、多组可变参数混合时，分段信息要按 ODS 声明顺序维护。`AttrSizedResultSegments` 对应结果分组；嵌套列表还需内部各段长度，不能用一个总数替代。
+先检查 body 非空，之后才安全取得入口 Block。
 
-读取多组可变参数操作时，应连同生成 accessor 和分段字段一起读，才能确定一段实际 operand 列表怎样对应各组参数。
+### 3.2 出口结果对应
 
-## 4. 先确认外壳，再检查区域内的出口
-
-考虑损坏的输入：scope 没有 Block；入口参数数量错误；yield 给出错误类型；甚至区域中某项操作自身都不合法。父操作 verifier 若一开始就强行读取“最后一个操作的正确 yield 参数”，可能在发出有意义的诊断之前就访问非法结构。
-
-MLIR 因而区分普通操作验证和依赖内部操作的区域验证。沿本例需要的关系阅读顺序：
+内部操作验证完成后，再确认 Block 最后确实是 lesson.yield，并检查：
 
 ```text
-结构与 ODS 字段检查
-  → 不依赖内部操作合法性的 trait/interface 检查与 verify()
-  → 验证区域内的操作
-  → 依赖内部操作的检查与 verifyRegions()
+yield 的输入类型序列 == scope 的结果类型序列
 ```
 
-这不是建议手动按顺序调用两个成员函数。应从工具或完整 `mlir::verify` 入口进入整个验证过程，框架负责相应步骤。结构性 trait 会先检查必要结构，ODS 再检查字段和类型种类；完整实现还处理 SSA、支配等约束。
-
-我们的代码把两件事放在对应阶段：
+这要求读取内部操作，所以放在区域验证阶段。实际实现为：
 
 <!-- source-example: scope-verify -->
 ```cpp
@@ -176,13 +119,11 @@ LogicalResult ScopeOp::verifyRegions() {
 }
 ```
 
-`verify()` 先拒绝空 body，再读取入口参数。它只比较输入与 Block 参数，不依赖内部计算。
+普通 `verify()` 检查外壳和入口；`verifyRegions()` 在内部操作经过验证后读取出口。这样的顺序让后面的检查能够使用前面已经建立的前提，例如 body 存在、内部 yield 的字段可以合法访问。
 
-`verifyRegions()` 才看最后一个操作是不是合法的 yield，并比较它传出的类型与父操作结果。它依赖前一阶段已经保证 body 非空，也受益于内部操作的验证结果。例如错误地把 `lesson.yield` 放到其他父操作中，会被其 `HasParent` 契约拒绝。
+比较类型序列也同时比较长度。只检查第一个类型会漏掉多结果、遗漏参数和空列表等情况。
 
-比较类型序列同时约束数量和逐项类型。若只比较“第一个元素类型”，零结果、多结果和遗漏值等情况就可能漏检。
-
-一个紧邻的反例是：父操作宣称返回 i64，区域却 yield 入口的 i32。两项类型各自都合法，入口也绑定正确，失败发生在出口对应关系：
+### 3.3 出口不匹配的反例
 
 <!-- irdef-invalid: scope-yield-mismatch | yield types must match result types -->
 ```text
@@ -197,42 +138,91 @@ module {
 }
 ```
 
-## 5. 隔离是显式依赖的契约
+入口的 i32 对应没有问题，但父操作宣称结果为 i64，yield 却交出 i32。工具因此报告 `yield types must match result types`。这不是 parser 无法读取语法，而是读出的结构没有满足操作协议。
 
-回到主例，把 body 中 `lesson.limit` 的输入从 `%local` 改为外部 `%x`，数值推演似乎完全相同。然而它违反了本例的 `IsolatedFromAbove`：body 直接引用了定义在 scope 外面的 SSA 值。
+## 4. 区域隔离与显式依赖
 
-显式传入的写法把区域依赖集中在父操作的 operand 列表，方便克隆、搬移和独立处理这片区域时寻找输入。隔离不自动证明移动安全，但让依赖结构更明确。作用域规则必须由方言设计决定：许多 SCF 区域允许捕获，不能因此认为捕获本身不合法；本例是明确选择禁止它。
+回到第一节，把内部 clamp 的输入从 `%local` 改成外部 `%x`。在那一次数值推演中它们都是 12，但两种写法在依赖结构上不同：
 
-同理，如果希望 scope 能包含任意函数调用，需要进一步考虑符号可见性、调用效果和相关接口。`IsolatedFromAbove` 针对 SSA 捕获，不等于区域无法通过符号引用外部函数。
+```text
+显式绑定：外部 x → scope operand → 内部参数 local → clamp
+直接捕获：外部 x ────────────────────────────→ clamp
+```
 
-## 6. IR 合法以后，通用分析还缺什么
+本例选择隔离，因此后一种写法违反 `IsolatedFromAbove`。这样一来，区域需要的 SSA 输入集中在 scope 的 operand 列表中，克隆或独立处理区域时更容易确定依赖。
 
-目前已有结构验证、类型对应和递归效果信息，但通用数据流分析不会阅读本章的中文语义，就自动知道 body 执行一次、输入怎样绑定、yield 怎样映射到父结果。
+隔离不自动证明任意搬移都是安全的，也不禁止所有形式的外部引用。它约束 SSA 捕获；若内部使用符号调用函数，还需遵守符号可见性及调用语义。标准 SCF 的许多区域允许捕获，不能把本例的设计推广成所有 Region 的统一规则。
 
-这些区域控制与数据流关系通常通过 `RegionBranchOpInterface` 等协议提供给消费者。它与本章接口的关联是：
+## 5. 可变参数与多结果传递
 
-- `SingleBlock` 回答结构限制。
-- `RecursiveMemoryEffects` 帮助消费者汇总内部效果。
-- 区域分支接口向相关分析提供可能的进入/退出及值传递关系。
-- lowering 负责把这一执行协议变成目标支持的表示。
+将输入组和结果组各扩展为两个值，不改变刚才的基本协议：
 
-本工程只提供了前两类信息。后续要让通用分析穿过这个区域，还需要提供区域分支协议；结构验证通过本身不会建立这些控制流知识。
+<!-- irdef-example: scope-swap -->
+```text
+module {
+  func.func @swap(%x: i32, %y: i64) -> (i64, i32) {
+    %r:2 = "lesson.scope"(%x, %y) ({
+    ^bb0(%a: i32, %b: i64):
+      lesson.yield %b, %a : i64, i32
+    }) : (i32, i64) -> (i64, i32)
+    return %r#0, %r#1 : i64, i32
+  }
+}
+```
 
-## 阅读后的一个小推演
+进入时，x 对应 a，y 对应 b；退出时，第一个 yield 输入 b 对应父结果 0，第二个 a 对应父结果 1。所以入口类型为 `(i32,i64)`，出口类型为 `(i64,i32)`，各自在自己的边界上对应。
 
-先解释 `@swap` 中四组值的对应，再把两个 yield operand 的顺序调回去、保持父结果类型不变。应由哪一层拒绝？然后考虑把 `@empty` 的 yield 删除：空结果并不允许缺失所需 terminator。
+不能为了省事给 scope 加上“所有输入与结果同类型”的约束，那会排除这个合法程序。约束应来自执行协议，而不是看到多个值就套用一个现成 trait。
 
-现在应能从 scope 的四组值还原进入与退出过程，并判断结构、类型和捕获错误分别由哪层处理。接着读[解析与打印](./assembly_format)，专门追踪文本怎样构造成对象、对象又怎样写回文本。
+长度也可以为零：
 
-## 配套观察与依据
+<!-- irdef-example: scope-empty -->
+```text
+module {
+  func.func @empty() {
+    "lesson.scope"() ({
+      lesson.yield
+    }) : () -> ()
+    return
+  }
+}
+```
 
-观察入口为 `aicompiler-labs/llvm-mlir/06-ir-definition/README.md`，维护验证为 `docs/validate_ir_definition.py`。生成物保存在 artifacts，不要求先做完正式实验才能读原理。
+这里没有输入和结果，但 Region 仍有一个 Block 和所需出口。零个结果、空 Block、空 Region 是三种不同结构。yield 的声明式格式使用可选组，在 values 为空时省略值与类型，得到裸 `lesson.yield`。
 
-固定版本 LLVM `llvmorg-20.1.8`：
+### 多组可变字段的分段问题
 
-- [Operations.md](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/docs/DefiningDialects/Operations.md)：variadic/optional、验证顺序与 assembly format。
-- [OpDefinition.h](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/include/mlir/IR/OpDefinition.h)：单 Block、隔离、terminator 与分段 trait。
-- [Verifier.cpp](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/lib/IR/Verifier.cpp)：完整 IR 验证入口与区域递归。
-- [ControlFlowInterfaces.td](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/include/mlir/Interfaces/ControlFlowInterfaces.td)：区域控制流接口的下一步查阅入口。
+本例每个 operand/result 列表只有一个可变组，边界明确。如果同一个 operand 列表包含两组可变字段，仅知道总数无法判断各组长度：三个值可能分成 1+2，也可能分成 2+1。
 
-完整项目见 `06-ir-definition/Lesson.td`、`Lesson.cpp`。工程已验证单组 variadic、零/多结果和区域正反例；多组分段为原理推演，尚未提供 scope lowering 与 RegionBranch 模型。高级范围继续登记在覆盖表，当前证据不包含目标执行。
+这时需要额外的分段约定，例如 `AttrSizedOperandSegments`，或在语义确实要求等长时使用 `SameVariadicOperandSize`。多组 optional/variadic 的布局及访问器必须依据这种约定生成；本工程没有实现多组分段，不能把单组的结果直接当作验证证据。
+
+## 6. 结构验证、效果与控制流接口
+
+现在表示能够通过结构、类型和隔离验证，但通用分析仍需知道怎样理解内部计算。
+
+`RecursiveMemoryEffects` 表示需要考察内部操作的效果。外层只是容器，并不意味着内部任意读写都可以被忽略；yield 自身的无内存效果也不能抹去前面操作的效果。
+
+另一类分析要知道控制和数据怎样进入、离开区域。它不会从“恰好一个 Block”自动推导出“执行一次”，也不会仅凭入口和出口类型相等就知道 Value 的映射。相关消费者通常通过 `RegionBranchOpInterface` 等协议获取这些信息。
+
+因此可以把几种职责放回同一条 scope：
+
+| 层次 | 向工具提供什么 |
+|---|---|
+| 结构与自定义 verifier | 当前对象是否符合约定的形状和对应关系 |
+| 效果信息 | 内部是否有分析或优化必须考虑的行为 |
+| 区域控制流接口 | 通用分析所需的进入、退出及值传递关系 |
+| lowering 或执行实现 | 实际落实“进入一次并传出结果”的语义 |
+
+当前工程实现前两类，后两类留给后续任务。定义完整的语义不等于全部消费者已经实现对它的理解。
+
+## 理解检查
+
+在 swap 示例中，只交换 yield 的两个输入，保持父结果类型不变：哪一步验证会失败？再删除空结果示例的 yield：为什么“没有结果要传出”仍不足以允许缺少出口？
+
+如果将第一节内部的 clamp 换成返回自定义范围类型的 limit，入口与出口可以使用不同类型，只需在各自边界上对应。这样可以复用本章协议，而不必在第一次理解区域时同时掌握类型存储机制。
+
+## 实现与依据
+
+本章新增的普通整数示例和已有复杂类型、零/多结果用例均由 LLVM `llvmorg-20.1.8` 下的[IR 定义工程](https://github.com/jnfkdsn/aicompiler/tree/main/llvm-mlir/06-ir-definition)验证。传值表为语义推演，未执行 scope 的目标代码。
+
+[ODS 验证顺序](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/docs/DefiningDialects/Operations.md)、[Verifier.cpp](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/lib/IR/Verifier.cpp)和 [ControlFlowInterfaces.td](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/include/mlir/Interfaces/ControlFlowInterfaces.td)分别用于确认验证阶段及后续区域协议。下一章[解析与打印](./assembly_format)将专门解释表示与文本的对应。

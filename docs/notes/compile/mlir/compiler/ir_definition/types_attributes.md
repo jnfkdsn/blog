@@ -1,65 +1,32 @@
 ---
 order: 3
-title: 自定义 Type 与 Attribute：把领域信息放进 IR
-updated: 2026-09-14
+title: 自定义 Attribute 与 Type：参数与结果契约
+updated: 2026-10-01
 ---
 
-# 自定义 Type 与 Attribute：把领域信息放进 IR
+# 自定义 Attribute 与 Type：参数与结果契约
 
-`lab.clamp %x bounds(-4, 7) : i32` 保存了限制区间，但它的结果类型仍是普通 i32。沿 use-def 找到定义操作时，分析可以查询上一章的范围接口；若这个值穿过函数参数等边界，单看类型便不再知道它具有这个范围。
+前两章用两个整数属性保存 clamp 的上下界，接口再读取它们，告诉消费者结果范围。现在考虑两个不同的设计需求：多个操作都要保存同样结构的区间；结果离开定义操作后，仍希望其类型明确表达范围保证。
 
-这一章做一次明确的抽象设计：**用属性表达操作要求的限制区间，用类型表达计算结果向后续使用者提供的范围保证。** 然后沿文本解析、参数验证、Context 内存储与操作验证走完一条链。这里的自定义类型服务于教学中的领域 IR；实际编译器也可能保留 i32，把范围放在分析状态中，类型细化不是每项优化的必经之路。
+第一个需求适合用自定义 Attribute 组织静态参数，第二个涉及自定义 Type。本章分别建立它们的用途，再将两者放回同一条计算中。它们是可选择的 IR 设计工具，不能因为已经实现一个 Dialect，就推断还必须定义新的类型和属性。
 
-## 1. 同一个区间，在操作与值上承担不同职责
+## 1. 区间参数与自定义 Attribute
 
-新操作 `lesson.limit` 仍执行有符号 i32 clamp，但结果使用专门的范围类型：
+原来的表示是：
 
-<!-- irdef-example: types-input -->
 ```text
-module {
-  func.func @clip(%x: i32) -> !lesson.range<-4, 7> {
-    %r = lesson.limit %x bounds(#lesson.bounds<-4, 7>) : !lesson.range<-4, 7>
-    return %r : !lesson.range<-4, 7>
-  }
-}
+%r = lab.clamp %x bounds(-4, 7) : i32
 ```
 
-先按含义阅读，不急着看 C++：
+其中 lower 与 upper 是两个独立整数属性。若许多操作都使用区间，每个操作都需要组织两个字段，并检查顺序与范围。可以将这组静态数据定义为一个有明确含义的属性对象：
 
-- `%x` 是本次执行得到的 i32 值，属于运行时数据。
-- `#lesson.bounds<-4, 7>` 是静态属性，规定这次计算将输入限制到哪个闭区间。
-- `!lesson.range<-4, 7>` 是结果类型，表示一个具有 i32 整数含义、且有符号值保证处在该区间内的值。
-- 函数返回类型携带相同的保证，调用边界因而能表达这种约束。
-
-例如输入为 12，按操作语义结果是 7；输入为 -2，结果为 -2。这是我们规定的操作执行含义。**写出一个带范围的类型不会在运行时插入比较、截断或检查。** 编译器作者还需在 lowering 中实现这些计算，并确保每个能产生这种类型的操作都维持承诺。
-
-正常打印这个操作时，生成器已知道属性必须是 BoundsAttr、结果必须是 RangeType，可以省略它们的种类前缀，得到 `lesson.limit %arg0 bounds(<-4, 7>) : <-4, 7>`。上面的完整写法也可解析；函数签名等通用位置仍写 `!lesson.range`。这种缩写改变的是文本冗余，不改变对象种类。
-
-范围信息在这里出现两次是有意的。属性回答“操作做哪种计算”，类型回答“结果是什么样的值”。本例采用一个简单契约：结果类型的上下界必须与属性完全一致。后面可以从属性推导类型，减少重复书写，但不能因为希望语法简洁就省略契约本身。
-
-## 2. 定义参数化类型，先决定什么算同一种类型
-
-我们把 `!lesson.range<L, U>` 限定为有序的、可由有符号 i32 表示的整数闭区间。它没有独立位宽参数：i32 是这个教学类型的固定语义。
-
-<!-- source-example: range-type -->
 ```text
-def RangeType : TypeDef<Lesson_Dialect, "Range"> {
- let mnemonic = "range";
- let parameters = (ins "int64_t":$lower, "int64_t":$upper);
- let assemblyFormat = "`<` $lower `,` $upper `>`";
- let genVerifyDecl = 1;
-}
+#lesson.bounds<-4, 7>
 ```
 
-这份定义包含三个相互配合的决定：
+它表示一对有序的、可由有符号 i32 表达的上下界。它本身不执行 clamp，也不产生 SSA Value；操作持有这个对象，用它决定自己的计算参数。
 
-1. `TypeDef` 指定它是 Lesson dialect 下的一种类型，生成 C++ `RangeType`。
-2. `lower`、`upper` 是类型身份的参数。上下界不同，得到不同类型。
-3. `assemblyFormat` 规定参数的文本形式；`genVerifyDecl` 请求生成参数验证函数的声明。
-
-`!lesson.range` 中的 `lesson` 标识方言，`range` 来自 mnemonic。角括号里的两个整数按声明顺序解析。没有 SSA operand，没有 IR 中的计算，也没有为每个使用它的 Value 生成一个“类型操作”。
-
-接着用相同的两个参数定义属性：
+实际 ODS 定义为：
 
 <!-- source-example: bounds-attr -->
 ```text
@@ -71,31 +38,58 @@ def BoundsAttr : AttrDef<Lesson_Dialect, "Bounds"> {
 }
 ```
 
-`AttrDef` 生成 `BoundsAttr`。`#` 与 `!` 的不同不是装饰：parser 需要知道此处正在读 Attribute 还是 Type，它们进入不同的对象体系。两个对象即使保存相同的整数，也不能互相替代。
+`lower` 和 `upper` 是属性参数，`mnemonic` 决定文本里的 bounds 名字，`assemblyFormat` 决定两个参数在尖括号中的顺序。`int64_t` 是保存参数的 C++ 类型；本例仍要求其数值落在 i32 的有符号范围内，下一节验证机制会补足这个约束。
 
-## 3. 类型本身合法，与操作使用它合法，是两层检查
+这样，操作可以拥有一个 bounds 属性，而不用各自定义两份整数。共享属性对象的意义在于复用这组数据的结构与合法性规则，计算含义仍由使用它的操作规定。
 
-先检查每个区间对象独立成立所需的条件：
+## 2. 结果范围与自定义 Type
+
+现在换到使用者一侧。一个值的类型如果只有 i32，类型本身只表达整数位宽等信息，不包含“它一定落在 [-4,7]”这一保证。范围接口可以回到定义操作查询，但也可以选择把范围纳入值的类型：
 
 ```text
-INT32_MIN ≤ lower ≤ upper ≤ INT32_MAX
+!lesson.range<-4, 7>
 ```
 
-RangeType 与 BoundsAttr 的参数验证共享这个规则，核心入口如下：
+本教学类型的语义是：一个具有有符号 i32 整数含义、且数值保证落在指定闭区间内的值。它不规定目标机器上的新数据布局；后续仍需定义怎样转换和执行这种表示。
 
-<!-- source-example: type-attr-verify -->
-```cpp
-LogicalResult RangeType::verify(function_ref<InFlightDiagnostic()> emitError, int64_t lower, int64_t upper) {
- return verifyBounds(emitError, lower, upper);
-}
-LogicalResult BoundsAttr::verify(function_ref<InFlightDiagnostic()> emitError, int64_t lower, int64_t upper) {
- return verifyBounds(emitError, lower, upper);
+类型的 ODS 为：
+
+<!-- source-example: range-type -->
+```text
+def RangeType : TypeDef<Lesson_Dialect, "Range"> {
+ let mnemonic = "range";
+ let parameters = (ins "int64_t":$lower, "int64_t":$upper);
+ let assemblyFormat = "`<` $lower `,` $upper `>`";
+ let genVerifyDecl = 1;
 }
 ```
 
-`verifyBounds` 在完整源码中比较上下界与 i32 范围，失败时发出 `expected ordered bounds within signed i32 range`。因此 `!lesson.range<8, 7>` 和 `#lesson.bounds<-4, 2147483648>` 各自就不合法，无需先把它们放进 `lesson.limit`。
+形式与属性很像，但两者所处的位置不同：
 
-再把两种对象放到操作中：
+| 对象 | 附着在哪里 | 本例表达什么 |
+|---|---|---|
+| `#lesson.bounds<-4,7>` | 操作的静态字段 | 此次 clamp 使用哪个区间 |
+| `!lesson.range<-4,7>` | 结果 Value 的类型 | 使用者可以依赖怎样的数值保证 |
+
+两者都保存两个整数，却不能互相替代。只知道结果位于 `[-4,7]`，不能决定它究竟怎样由 x 计算而来；很多不同计算都可能产生该范围内的值。属性在本例中规定计算参数，类型描述结果契约。
+
+## 3. 操作参数与结果类型的组合
+
+将两项设计放回一个新的操作 `lesson.limit`：
+
+<!-- irdef-example: types-input -->
+```text
+module {
+  func.func @clip(%x: i32) -> !lesson.range<-4, 7> {
+    %r = lesson.limit %x bounds(#lesson.bounds<-4, 7>) : !lesson.range<-4, 7>
+    return %r : !lesson.range<-4, 7>
+  }
+}
+```
+
+从左到右，`%x` 是普通 i32 输入；bounds 属性给出区间；`%r` 的类型携带结果保证。以输入 12 作语义推演，操作应把它限制为 7，因此输出满足 `!lesson.range<-4,7>`。
+
+实际定义如下：
 
 <!-- source-example: limit-op -->
 ```text
@@ -108,7 +102,41 @@ def LimitOp : Op<Lesson_Dialect, "limit", [Pure, DeclareOpInterfaceMethods<Stati
 }
 ```
 
-ODS 生成的约束先确认输入是 i32、属性是 BoundsAttr、结果属于 RangeType。这还不够。下面的两种范围各自都合法，却不满足本操作“完全一致”的约定：
+`BoundsAttr:$bounds` 与 `RangeType:$result` 分别约束字段种类。StaticBounds 接口继续提供公共查询，所以前一章的消费者仍能向操作索取范围。
+
+本例选择了一个方便检查的强约定：结果类型的两个端点必须与 bounds 属性完全相等。这会在文本中重复写一遍范围，但清楚地区分了参数和结果类型的责任。之后可以改进构造与类型推导，减少这种重复书写。
+
+仅检查字段种类还不能保证两组范围一致。下面要把对象自身的合法性与它们组合使用的合法性分开。
+
+## 4. 参数验证与操作验证
+
+### 4.1 类型和属性的参数约束
+
+BoundsAttr 和 RangeType 各自要求：
+
+```text
+INT32_MIN <= lower <= upper <= INT32_MAX
+```
+
+无论某个对象被哪条操作使用，`<8,7>` 都违反这项约定。两种对象的参数验证因此共享一个辅助检查：
+
+<!-- source-example: type-attr-verify -->
+```cpp
+LogicalResult RangeType::verify(function_ref<InFlightDiagnostic()> emitError, int64_t lower, int64_t upper) {
+ return verifyBounds(emitError, lower, upper);
+}
+LogicalResult BoundsAttr::verify(function_ref<InFlightDiagnostic()> emitError, int64_t lower, int64_t upper) {
+ return verifyBounds(emitError, lower, upper);
+}
+```
+
+`verifyBounds` 比较上下界顺序和 i32 范围，失败时报告 `expected ordered bounds within signed i32 range`。ODS 中的 `genVerifyDecl = 1` 请求生成这些验证方法的声明，实现由我们提供。
+
+这一层先保证“单个区间对象成立”。例如 `[7,7]` 合法，但下界 8、上界 7 不合法。
+
+### 4.2 不同字段之间的一致性
+
+下面的两个区间各自合法：
 
 <!-- irdef-invalid: mismatched-bounds | result range must match bounds attribute -->
 ```text
@@ -120,7 +148,7 @@ module {
 }
 ```
 
-这个跨字段关系由操作 verifier 检查，而非类型 verifier：
+问题在于属性要求限制到 `[-4,7]`，结果类型却写成 `[-4,8]`，不符合本例选择的完全一致规则。操作验证检查的是这层关系：
 
 <!-- source-example: limit-verify -->
 ```cpp
@@ -135,24 +163,26 @@ int64_t LimitOp::getMinimum() { return getBounds().getLower(); }
 int64_t LimitOp::getMaximum() { return getBounds().getUpper(); }
 ```
 
-最后两个成员函数还完成上一章的接口实现：消费者通过 `StaticBounds` 取得上下界，不必知道字段已经换成自定义属性。
+前半段取得结果类型与属性，逐项比较端点；后面的两个方法实现 StaticBounds，将属性里的范围交给通用消费者。
 
-沿完整解析过程整理一下：文本先生成并验证类型/属性参数；操作构造出输入、静态数据和结果；操作验证再检查字段种类与彼此关系。每一层拒绝不同种类的错误。`verify` 通过也只说明已实现的这些规则成立，不能证明未来的 lowering 一定正确执行 clamp。
+`[-4,7]` 确实包含在 `[-4,8]` 中，从数值保证看，放宽范围并非必然不安全。但我们的操作定义选择了更严格的相等约定，便于避免不一致和推导歧义。Verifier 检查的是明确制定的契约，设计者可以选择其他规则，但必须一并说明语义与消费者如何理解它。
 
-## 4. 为什么反复 get 不会反复复制一个类型对象
+验证顺序由此清楚了：先确认参数对象和字段种类，再检查操作中几份信息的对应关系。类型正确不等于操作正确，操作验证通过也不自动证明后续 lowering 的数值实现正确。
 
-如果一万个值都使用 `!lesson.range<-4, 7>`，每个值保存一份独立区间结构既浪费空间，也让类型比较更昂贵。MLIR 在同一个 Context 中对类型和属性进行 uniquing：按种类及参数查找存储，已有就复用，否则创建并保存。
+## 5. 类型身份与共享存储
 
-以本章生成的 RangeType 为例：
+一万个 Value 都可能使用 `!lesson.range<-4,7>`。若每个 Value 都复制一份区间数据，既浪费存储，也不利于比较。MLIR 因此在同一个 Context 中按类型种类与参数共享存储，这一机制称为 uniquing。
+
+对于当前类型，可以沿一次请求理解：
 
 ```text
-RangeType::get(context, -4, 7)
-  → 用 (-4, 7) 作为本类型的存储 key 查询
-  → 已存在：返回指向既有 storage 的轻量句柄
-  → 不存在：分配、初始化并登记 storage，再返回句柄
+请求 RangeType(-4, 7)
+  → 按 RangeType 种类及参数 (-4,7) 查找
+  → 已有存储：返回引用它的句柄
+  → 尚无存储：创建并登记，再返回句柄
 ```
 
-C++ probe 展示这个过程在对象比较上的结果：
+实际 C++ 观察为：
 
 <!-- source-example: uniquing -->
 ```cpp
@@ -162,21 +192,21 @@ auto c = lesson::RangeType::get(&context, -4, 8);
 llvm::outs() << "same_parameters=" << (a == b) << " different_parameters=" << (a == c) << "\n";
 ```
 
-实际输出是：
+输出：
 
 ```text
 same_parameters=1 different_parameters=0
 ```
 
-两项比较的含义是：相同 Context 中，相同类型种类与参数得到相等的句柄；改一个参数就得到不同类型。可打开生成的 `LessonTypes.cpp.inc`，查看 `RangeTypeStorage` 的 `KeyTy`、比较、hash 和构造函数，它们把这一机制落实成存储代码。
+相同参数的两次请求得到相等句柄，改变一个端点则得到另一种类型。这里的 `get` 取得一个类型对象，不是创建一条 IR 操作，也不计算运行时整数。
 
-句柄不是由调用者 `delete` 的独立类型对象。普通不可变参数存储由 Context 管理，Context 销毁后，保留的句柄也不能继续使用。本章定义没有可变存储部分，不能通过给 `a` 的 lower 赋新值来修改所有共享类型；应请求另一类型，再显式处理相关 IR 变化。
+这些普通不可变类型和属性的存储由 Context 管理。复制句柄不复制全部参数，调用者不应单独 delete 它；Context 销毁后句柄不能继续使用。想换一个范围，应请求另一种类型并合法地调整相关 IR，而不是修改共享对象中的 lower。
 
-跨 Context 的同文本类型不具有这里的句柄身份保证。不能把不同 Context 的对象任意混装进同一份 IR。
+如果把参数扩展成字符串或数组，还需要保证存储拥有足够长的生命周期。`StringRef`、`ArrayRef` 本身是非拥有视图，不能让类型存储长期引用解析器的临时缓冲区；参数分配与复制规则需要与 uniquing 一起设计。当前两个整数按值保存，所以不存在这项额外问题。
 
-## 5. get 与 getChecked 怎样选择
+## 6. 合法构造与 checked 构造
 
-刚才三次请求的参数都合法。现在把条件改成下界 8、上界 7：这个区间不存在，我们希望得到可处理的失败，而不是一个非法类型。probe 的下一步因此改用 checked 构造：
+先前请求的三个 RangeType 都合法。若参数来自输入文本或其他尚未验证的数据，就可能遇到 `<8,7>`，这时需要能返回失败的构造入口：
 
 <!-- source-example: checked-construction -->
 ```cpp
@@ -185,74 +215,53 @@ auto invalid = lesson::RangeType::getChecked(
 llvm::outs() << "invalid_is_null=" << !invalid << "\n";
 ```
 
-实际结果是 `invalid_is_null=1`，同时出现上下界非法的诊断。调用者拿到空句柄，便能停止构造依赖这个类型的操作。
+实际输出 `invalid_is_null=1`，同时报告上下界非法。调用者由空句柄知道构造失败，应停止继续创建依赖该类型的对象。
 
-对于带参数验证的本章类型：
+对本例而言，`get` 用于调用者已经保证参数合法的情况；非法参数可能触发断言，不能把 Release 中未必存在的断言当作输入验证。`getChecked` 则显式执行参数验证，以诊断和空句柄表示失败。生成的文本 parser 使用 checked 路径，因而非法区间会在构造类型或属性时被拒绝。
 
-- `get` 面向调用者已经保证参数合法的构造，非法参数可能触发断言；Release 构建不能靠断言承担可靠的输入校验。
-- `getChecked` 调用验证，失败时发出诊断并返回空句柄，调用者必须处理这个结果。
-- 本章生成的文本 parser 使用 checked 路径，从而将坏参数转成解析阶段的诊断。
+这与上一章操作 builder 的行为不同。操作可以先被构造，再接受完整 IR 验证；类型或属性的 checked 构造会先检查自己的参数。操作里多份信息是否一致，仍需操作 verifier 另行确认。
 
-这与上一章“Operation builder 可以先构造，完整 verifier 另行调用”的讨论有联系，但不能机械等同。Type/Attribute 的参数合法性会参与 checked 构造；Operation 中诸如上下界字段与结果类型对应的关系，仍由操作验证负责。
+## 7. 类型相等、范围包含与转换
 
-## 6. 一个整数类型有子集，不代表 MLIR 自动拥有子类型系统
+数学上，`[-4,7]` 是 `[-4,8]` 的子集；在本例的普通类型相等检查中，两组参数不同，因此是不同类型。MLIR 不会因为区间包含关系自动给它们建立子类型规则。
 
-数学上，`[-4, 7]` 是 `[-4, 8]` 的子集。但本章两个 RangeType 的参数不同，所以 MLIR 的普通类型相等检查会认为它们不同。
-
-把 `%r : !lesson.range<-4, 7>` 直接放到要求 `!lesson.range<-4, 8>` 的位置，不会自动生成“安全放宽”。把它交给 `arith.addi` 也不会自动当作 i32 使用：arith 的操作约束不认识这个自定义标量类型。
-
-这意味着类型设计同时创造了后续工作：
-
-1. 明确哪些操作可生产、消费这种类型。
-2. 如需范围放宽，定义有清楚语义和验证规则的操作或转换。
-3. 降到已有整数表示时，转换结果类型、使用者以及函数/区域边界。
-4. 保证新表示仍执行原先计算，而不是只把类型字符串换掉。
-
-也可以选择让范围只存在于分析状态中，保留所有值为 i32。这样更容易复用现有操作，但跨边界传播和分析失效维护由分析负责。类型和分析是两种不同设计工具，应由抽象边界决定选择。
-
-## 7. 回到起点：能否只写一次区间
-
-现在已经知道，bounds 属性规定 clamp 怎样计算，RangeType 则描述结果保证。主例要求两组参数完全一致，因此构造时可以先读取属性中的上下界，再请求同参数的 RangeType，最后用这个类型创建结果。这样调用者只需提供一次区间，操作内部仍保留各自承担职责的属性与类型。
-
-这就是一个简单的结果类型推导过程：
+这会带来实际影响：
 
 ```text
-BoundsAttr(-4, 7)
-  → 读取 lower=-4、upper=7
-  → 请求 RangeType(-4, 7)
-  → 以此作为新操作的结果类型
+%r : !lesson.range<-4,7>
+  → 不能自动当作 !lesson.range<-4,8>
+  → 也不能自动交给只接受已有整数类型的 arith.addi
 ```
 
-专用 builder 可以执行这个过程。若希望通用工具也能请求推导，则通过 `InferTypeOpInterface` 提供协议。计算逻辑仍由作者实现，字段同名并不会让 ODS 自动理解它们的关系。
+若需要放宽范围或转为 i32，必须规定相应操作或转换，并正确处理使用者、函数签名和区域边界。不能只改一个打印字符串，把尚不匹配的其他对象留在原处。
 
-推导回答“应构造什么类型”，验证回答“当前对象是否满足契约”。从文本读入显式类型，或由其他 C++ 调用者创建操作时，仍然需要后者。因而主例保留严格相等的 verifier；减少书写不等于放松语义要求。
+因此，自定义类型的收益与成本相伴：契约可以跟随 Value 显式传播，但生产者、消费者和 lowering 都要支持它。另一种设计是保留 i32，将范围存在分析结果中；这更容易复用已有操作，但分析需要维护传播和失效。
 
-## 阅读后的一个小推演
+本章提供的是一个类型设计例子，并不主张所有数值范围都应进入类型系统。
 
-把主例的结果类型改为 `!lesson.range<-4, 8>`，属性保持不变：RangeType 的参数验证会通过，LimitOp 的字段关系验证会失败。再把属性改为 `#lesson.bounds<9, 8>`：这次还没到跨字段对应检查，属性自身的参数已经非法。
+## 8. 结果类型推导
 
-最后思考：如果新增一个声称能产生 RangeType 的操作，却实际返回区间外数值，谁能发现？普通类型相等和本章参数 verifier 无法检查其所有动态执行。需要正确的操作语义、实现，以及相应转换与数值验证。这也是为什么自定义类型的核心是建立契约，而不只是增加一种文本写法。
+回到第 3 节的重复端点。既然操作要求类型与属性完全一致，构造者可以从属性生成结果类型：
 
-<details>
-<summary>实现时查阅：Properties、复杂参数的所有权与 C++ 重载</summary>
+```text
+BoundsAttr(-4,7)
+  → 读取两个端点
+  → 请求 RangeType(-4,7)
+  → 用该类型创建操作结果
+```
 
-**属性与 Properties 的关系。** BoundsAttr 是 Context 中可共享的静态数据对象。在这个固定版本生成的 Op 实现中，作为 inherent 字段的 `bounds` 由操作的 Properties 保存对应属性句柄。Properties 是操作拥有的数据容器，Attribute 是其中可引用的一类数据；两者不是两套互斥的属性格式。使用生成的访问器读字段，可避免把“字段一定在普通字典里”写死在消费者中。
+专用 builder 可以封装这个过程；希望通用基础设施也能请求推导时，可以提供 `InferTypeOpInterface`。计算方式仍需作者实现，字段同名不会自动建立关系。
 
-**把两个整数换成字符串或数组。** 当前 `int64_t` 按值保存，没有外部缓冲区寿命问题。如果新增 `StringRef`/`ArrayRef` 参数，裸 C++ 引用可能指向解析器的临时内存。应选用具有合适分配/复制规则的 `StringRefParameter`、`ArrayRefParameter` 等参数描述，或实现定制存储构造；同时明确比较与 hash 使用哪些内容。否则 uniquing 得到的“长期存储”可能引用已经失效的数据。
+推导回答“应该生成什么类型”，验证回答“现有对象是否满足约定”。即使有推导，文本仍可能给出显式类型，其他 C++ 调用者也可能构造对象，所以跨字段验证仍有意义。本工程保留显式类型，尚未实现该推导接口。
 
-C++ 示例给 `getChecked` 传入显式 `int64_t` 实参，以对应生成重载的参数类型。这里不要求记模板重载细节；构造报错时，查生成声明比猜参数类型更直接。
+## 理解检查
 
-</details>
+依次判断三种变化：属性变成 `<8,7>`；属性不变但结果类型改成 `<-4,8>`；新增操作声明产生 `!lesson.range<-4,7>`，实际 lowering 却返回 100。前两项可由本章哪一层验证发现？第三项为什么还需要语义实现及行为检查？
 
-## 配套观察与依据
+后面的 [Region 操作](./regions_assembly)讨论把一段计算放入操作内部。它先使用普通整数，不要求先熟悉本章的类型存储实现。
 
-`06-ir-definition/observe.py` 展示 `types.mlir`、通用格式、范围查询以及 `type-probe` 的实际输出。本例保留显式结果类型；本节的类型推导为设计推演，尚未实现 InferType 接口。高级自定义/可变存储留待实际参数需求展开。运行 `docs/validate_ir_definition.py` 可回归合法/非法参数、字段对应、函数返回类型不匹配和通用格式往返；这些是编译器侧证据，未执行 `lesson.limit` 的目标代码。
+## 实现与依据
 
-固定版本 LLVM `llvmorg-20.1.8` 的查阅入口：
+完整代码和观察程序见[IR 定义工程](https://github.com/jnfkdsn/aicompiler/tree/main/llvm-mlir/06-ir-definition)，按 LLVM `llvmorg-20.1.8` 验证参数、字段对应、句柄比较及失败构造。当前没有自定义类型的机器码 lowering。
 
-- [AttributesAndTypes.md](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/docs/DefiningDialects/AttributesAndTypes.md)：AttrTypeDef、参数存储、builders 与验证。
-- [StorageUniquerSupport.h](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/include/mlir/IR/StorageUniquerSupport.h)：`get`、`getChecked` 与存储共享入口。
-- [AttrTypeBase.td](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/include/mlir/IR/AttrTypeBase.td)：参数、生成器与 parser/printer 控制项。
-- 配套 build 的 `LessonTypes.cpp.inc`、`LessonAttrs.cpp.inc`、`LessonOps.h.inc`：本例实际生成代码。
-
-下一章[定义带 Region 的操作](./regions_assembly)把这个计算放入一个新操作的 Region，解释新类型怎样沿区域输入与结果协议流动。
+[AttributesAndTypes 文档](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/docs/DefiningDialects/AttributesAndTypes.md)说明声明与存储规则；[StorageUniquerSupport.h](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/include/mlir/IR/StorageUniquerSupport.h)用于确认 `get` 和 `getChecked`。高级可变存储、Type/Attribute Interface 等按具体设计需求继续展开。
