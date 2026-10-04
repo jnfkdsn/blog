@@ -1,23 +1,24 @@
 ---
 order: 1
 title: 学习路径与阶段标准
-updated: 2026-10-01
+updated: 2026-10-04
 ---
 
 # 学习路径与阶段标准
 
-本文安排 MLIR 内部的阅读依赖，不替代 workspace 的 [AI Compiler 总路线](/notes/compile/ai-compiler/stack_and_roadmap)。知识目录用于查找，学习路径用于决定下一步；目录顺序不必等于所有人的阅读顺序。
+本文记录 MLIR 的阶段标准、学习方式与已反馈进度，不替代 workspace 的 [AI Compiler 总路线](/notes/compile/ai-compiler/stack_and_roadmap)。IR 定义之后的逐篇阅读次序统一维护在[后续阅读顺序](./chapter_plan)，可以从第 1 站开始按页推进。
 
 ## 当前从哪里继续
 
-**当前从 [IR 定义模块](./compiler/ir_definition/)继续。** my.add 导读的重写方式已获认可，本模块五章已采用同样的逐步解释方式重构，并使用技术主题式标题。my.add 只承担定义与框架接入的整体导读；后续不再并行展开另一套重复课程。新版机制章节的阅读效果与独立实践状态分别确认。
+Conversion 之后的[编译流程导读](./tutorials/pipelines/overview)、[Tensor](./dialects/tensor/)三篇与 [Linalg](./dialects/linalg/)三篇已提供。若已理解操作与最小类型转换，可从导读继续；Conversion 的实际阅读状态仍待反馈，不因新章生成而记为已学完。
 
+**下一步阅读 [Dialect Conversion：操作转换与目标合法性](./compiler/conversion/operation_conversion)。** 基础 IR、Pass / Pattern 和 IR 定义已经完成当前轮次的阅读理解，可以开始学习怎样把自己定义的操作与类型转换成下游接受的表示。Conversion 的四篇主线、进阶参考与配套工程已提供，阅读安排见下方“下一步：转换基础与编译全链路”；用户阅读与独立实践待后续反馈。
 
-**阶段 A“认识基础 IR + 最小 IR 实验”已完成；阶段 B 的原理与小 Pass 工程已完成理解，阶段 C 的 IR 定义五章已读完，但各机制的联系仍需建立。** [my.add 工程](./tutorials/my_dialect/)已提供，尚不能据此认定相关机制已理解。已完成基础正文阅读，并独立编写 `sum_positive.mlir`：结构、类型和两个循环状态的传递经审阅与 verifier 检查通过。计数保留 i32 是当前练习的合法选择。
+阶段 A 的最小实验 `sum_positive.mlir` 已独立完成；阶段 B 的原理与小 Pass 工程已完成理解；阶段 C 中 IR 定义的重构版已读完，并确认比旧版更易理解。导读和五章机制现统一在[定义 IR 抽象](./compiler/ir_definition/)，自定义例子统一使用 `my` 方言。已有作者工程提供验证依据；个人独立修改与测试仍可在后续任务中积累，不阻塞下一章阅读。
 
 工作区还提供了验证、SCF→CF 和 C 调用示例，助手已验证五组 CPU 输入。它们帮助连接观察与执行，不把完整 ABI/lowering、全部错误构造或所有基础专题的深入掌握追加为阶段 A 关卡。
 
-已读完[Pass 与 pipeline：组织一次 IR 变换](./compiler/transforms/passes)，并讨论了 [C++ IR API](./compiler/transforms/ir_api) 的核心对象修改问题，重写后的 [PatternRewriter：把一次 IR 修改写成可应用的规则](./compiler/transforms/rewriting)已获得“主线更清楚、更易理解”的反馈，[实现并测试一个小 Pass](./tutorials/first_pass)也已完成理解。[一个操作是怎样被定义出来的](./compiler/ir_definition/op_definition)也已完成学习，IR 定义其余章节也已读完；接下来通过完整的小工程巩固，原章节按需查阅。无需先背完 API；配套程序由编写者完成编译和验证，不据此将学习者的独立 C++ 实现能力标为完成。串联这几章时先读[IR 变换基础总览](./compiler/transforms/)，再按需回查各章。阶段 B 的已学内容如下：
+已读完[Pass 与 pipeline：组织一次 IR 变换](./compiler/transforms/passes)，并讨论了 [C++ IR API](./compiler/transforms/ir_api) 的核心对象修改问题，重写后的 [PatternRewriter：把一次 IR 修改写成可应用的规则](./compiler/transforms/rewriting)已获得“主线更清楚、更易理解”的反馈，[实现并测试一个小 Pass](./tutorials/first_pass)也已完成理解。[一个操作是怎样被定义出来的](./compiler/ir_definition/op_definition)也已完成学习，IR 定义其余章节也已读完；接下来通过转换任务把定义与变换连接起来，原章节按需查阅。无需先背完 API；配套程序由编写者完成编译和验证，不据此将学习者的独立 C++ 实现能力标为完成。串联这几章时先读[IR 变换基础总览](./compiler/transforms/)，再按需回查各章。阶段 B 的已学内容如下：
 
 | 顺序 | 章节 | 当前状态 | 本节要建立的能力 |
 |---|---|---|---|
@@ -54,7 +55,7 @@ MLIR 学习服务于解释和修改 AI 编译器中的表示与变换。当前�
 
 ## 阶段 C：操作定义与语义契约
 
-[定义 IR 抽象](./compiler/ir_definition/)是以下机制的主要学习入口。已经理解 [my.add 导读](./tutorials/my_dialect/01_minimal_dialect)后，可以直接从操作定义继续：它用 clamp 展示属性、验证和实际 Pattern 展开。Region 章先使用普通整数，不要求先掌握自定义类型存储；解析打印也可在操作定义后按需阅读。
+[定义 IR 抽象](./compiler/ir_definition/)是以下机制的主要学习入口。已经理解 [my.add 导读](./compiler/ir_definition/dialect_basics)后，可以直接从操作定义继续：它用 clamp 展示属性、验证和实际 Pattern 展开。Region 章先使用普通整数，不要求先掌握自定义类型存储；解析打印也可在操作定义后按需阅读。
 
 | 顺序 | 内容 | 内容定位 | 本次理解目标 |
 |---|---|---|---|
@@ -63,11 +64,19 @@ MLIR 学习服务于解释和修改 AI 编译器中的表示与变换。当前�
 | C3 | [自定义 Attribute 与 Type](./compiler/ir_definition/types_attributes) | 计算参数与结果保证 | 分层验证、类型身份、checked 构造与转换需求 |
 | C4 | [Region 操作](./compiler/ir_definition/regions_assembly) | 普通整数到多结果的区域协议 | 入口/出口对应、隔离、分阶段验证与分析边界 |
 | C5 | [解析与打印](./compiler/ir_definition/assembly_format) | 同一个对象的两种文本入口 | 文本字段 → OperationState → 验证 → 打印往返 |
-| C6 | Dialect Conversion | 后续模块，待编写；不等待另一个 my.add 系列 | legality、类型转换与函数/区域边界衔接 |
+| C6 | [Dialect Conversion](./compiler/conversion/) | 独立机制模块；4 篇主线与 1 篇进阶参考已提供 | legality、类型转换与函数/区域边界衔接 |
 
-C1 的观察入口为 `aicompiler-labs/llvm-mlir/05-op-definition/`。可按需回查自定义/通用打印、builder 构造与验证结果。C2—C5 共用 `aicompiler-labs/llvm-mlir/06-ir-definition/`，观察脚本按章展示查询、清理、类型身份和区域结构。完整 RegionBranch 模型、多组 variadic 实现、自定义高级存储等继续留作进阶范围，见模块总览与覆盖表。
+C1 的观察入口为 `aicompiler-labs/llvm-mlir/05-op-definition/`。可按需回查自定义/通用打印、builder 构造与验证结果。C2—C5 共用 `aicompiler-labs/llvm-mlir/06-ir-definition/`，观察脚本按章展示查询、清理、类型身份和区域结构。完整 RegionBranch 模型、多组 variadic 实现、自定义高级存储等已有进阶篇与参考工程，见模块总览与覆盖表。
 
 先前已理解 `0+x` 的扩展思路；独立改动和测试的证据后续补交即可，不阻塞当前模块阅读，也不以作者生成工程代替个人实践完成。
+
+## 下一步：转换基础与编译全链路
+
+**后续逐篇阅读以[IR 定义之后的阅读顺序](./chapter_plan)为准。** 该页按依赖安排 11 站：Conversion 基础 → 编译流程导读 → Tensor/Linalg → MemRef/Bufferization → 转换边界与 CPU 执行 → Softmax → 分析 → 结构化优化 → Matmul/Attention → GPU/NPU → 真实项目。这里不再维护第二张可能不同步的章节顺序表。
+
+近期只推进 Conversion 的前两篇，随后进入编译流程导读。混合表示与调用/区域边界在 CPU 执行前回访；1:N、复杂 ODS、接口消费者等放在路线末尾的按需入口。理解 clamp 的字段、Pattern 的引用替换与 verifier 的职责，就足以开始下一章，不要求通读生成代码。
+
+各站给出本轮理解目标和配套实验编号。正文生成与作者验证已经完成；个人阅读、独立修改及项目实践继续依据反馈记录。
 
 ## 阶段 A 内容索引（按需回顾）
 
@@ -115,3 +124,11 @@ C1 的观察入口为 `aicompiler-labs/llvm-mlir/05-op-definition/`。可按需�
 阶段并非每个主题只接触一次：例如 B 首先使用 Interface 判断一个 Op 能否改写，C 再实现 Interface，E 再分析它怎样支撑优化。深度递进由[覆盖表](./coverage)的目标深度控制，不能用“学过一次”代替长期能力。
 
 Softmax、归约和 attention 会在 D—E 作为贯通项目。当前的小程序专门训练 IR 语义；进入张量和内存之后再逐步增加计算与性能复杂度。Triton/Triton-Ascend 的具体流水线在对应项目与版本中核对，不假设每个 MLIR 编译器都采用相同 lowering 顺序。
+
+结构化优化已提供完整六篇：[分块/融合/交换](./compiler/optimization/)之后，读 [Vector 三篇](./dialects/vector/)，再进入[自动向量化](./compiler/optimization/vectorization)、[Transform](./compiler/optimization/transform)与[性能分析](./compiler/optimization/performance)。[Affine](./dialects/affine/)补访问与依赖推理；14/15 实验提供数值、调度诊断和实测。设备映射正文已提供，新增内容不改变已确认的个人阅读进度。
+
+## 主线之后的按需回访
+
+需要接入工具时读[C/Python、Bytecode与插件](./guides/)；需要实现更复杂变换时回访[CFG维护](./compiler/transforms/ir_maintenance)、[1:N](./compiler/conversion/one_to_many)、[复杂ODS](./compiler/ir_definition/complex_ods)与[接口消费者](./compiler/ir_definition/region_interfaces)。遇到新领域表示时从[Quant/Sparse/Shape/IRDL等](./dialects/extensions/)确认用途与边界。源码阅读采用[一个变化的有限链](./guides/source_reading)，不以通读框架为进入项目的条件。
+
+本次写作范围已经有对应正文与作者证据；这不改变上面保留的用户已反馈状态。设备运行、真实项目修改和独立练习仍按学习任务推进。
