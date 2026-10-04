@@ -1,7 +1,7 @@
 ---
 order: 3
 title: 自定义 Attribute 与 Type：参数与结果契约
-updated: 2026-10-01
+updated: 2026-10-02
 ---
 
 # 自定义 Attribute 与 Type：参数与结果契约
@@ -15,13 +15,13 @@ updated: 2026-10-01
 原来的表示是：
 
 ```text
-%r = lab.clamp %x bounds(-4, 7) : i32
+%r = my.clamp %x bounds(-4, 7) : i32
 ```
 
 其中 lower 与 upper 是两个独立整数属性。若许多操作都使用区间，每个操作都需要组织两个字段，并检查顺序与范围。可以将这组静态数据定义为一个有明确含义的属性对象：
 
 ```text
-#lesson.bounds<-4, 7>
+#my.bounds<-4, 7>
 ```
 
 它表示一对有序的、可由有符号 i32 表达的上下界。它本身不执行 clamp，也不产生 SSA Value；操作持有这个对象，用它决定自己的计算参数。
@@ -30,7 +30,7 @@ updated: 2026-10-01
 
 <!-- source-example: bounds-attr -->
 ```text
-def BoundsAttr : AttrDef<Lesson_Dialect, "Bounds"> {
+def BoundsAttr : AttrDef<My_Dialect, "Bounds"> {
  let mnemonic = "bounds";
  let parameters = (ins "int64_t":$lower, "int64_t":$upper);
  let assemblyFormat = "`<` $lower `,` $upper `>`";
@@ -47,7 +47,7 @@ def BoundsAttr : AttrDef<Lesson_Dialect, "Bounds"> {
 现在换到使用者一侧。一个值的类型如果只有 i32，类型本身只表达整数位宽等信息，不包含“它一定落在 [-4,7]”这一保证。范围接口可以回到定义操作查询，但也可以选择把范围纳入值的类型：
 
 ```text
-!lesson.range<-4, 7>
+!my.range<-4, 7>
 ```
 
 本教学类型的语义是：一个具有有符号 i32 整数含义、且数值保证落在指定闭区间内的值。它不规定目标机器上的新数据布局；后续仍需定义怎样转换和执行这种表示。
@@ -56,7 +56,7 @@ def BoundsAttr : AttrDef<Lesson_Dialect, "Bounds"> {
 
 <!-- source-example: range-type -->
 ```text
-def RangeType : TypeDef<Lesson_Dialect, "Range"> {
+def RangeType : TypeDef<My_Dialect, "Range"> {
  let mnemonic = "range";
  let parameters = (ins "int64_t":$lower, "int64_t":$upper);
  let assemblyFormat = "`<` $lower `,` $upper `>`";
@@ -68,32 +68,32 @@ def RangeType : TypeDef<Lesson_Dialect, "Range"> {
 
 | 对象 | 附着在哪里 | 本例表达什么 |
 |---|---|---|
-| `#lesson.bounds<-4,7>` | 操作的静态字段 | 此次 clamp 使用哪个区间 |
-| `!lesson.range<-4,7>` | 结果 Value 的类型 | 使用者可以依赖怎样的数值保证 |
+| `#my.bounds<-4,7>` | 操作的静态字段 | 此次 clamp 使用哪个区间 |
+| `!my.range<-4,7>` | 结果 Value 的类型 | 使用者可以依赖怎样的数值保证 |
 
 两者都保存两个整数，却不能互相替代。只知道结果位于 `[-4,7]`，不能决定它究竟怎样由 x 计算而来；很多不同计算都可能产生该范围内的值。属性在本例中规定计算参数，类型描述结果契约。
 
 ## 3. 操作参数与结果类型的组合
 
-将两项设计放回一个新的操作 `lesson.limit`：
+将两项设计放回一个新的操作 `my.limit`：
 
 <!-- irdef-example: types-input -->
 ```text
 module {
-  func.func @clip(%x: i32) -> !lesson.range<-4, 7> {
-    %r = lesson.limit %x bounds(#lesson.bounds<-4, 7>) : !lesson.range<-4, 7>
-    return %r : !lesson.range<-4, 7>
+  func.func @clip(%x: i32) -> !my.range<-4, 7> {
+    %r = my.limit %x bounds(#my.bounds<-4, 7>) : !my.range<-4, 7>
+    return %r : !my.range<-4, 7>
   }
 }
 ```
 
-从左到右，`%x` 是普通 i32 输入；bounds 属性给出区间；`%r` 的类型携带结果保证。以输入 12 作语义推演，操作应把它限制为 7，因此输出满足 `!lesson.range<-4,7>`。
+从左到右，`%x` 是普通 i32 输入；bounds 属性给出区间；`%r` 的类型携带结果保证。以输入 12 作语义推演，操作应把它限制为 7，因此输出满足 `!my.range<-4,7>`。
 
 实际定义如下：
 
 <!-- source-example: limit-op -->
 ```text
-def LimitOp : Op<Lesson_Dialect, "limit", [Pure, DeclareOpInterfaceMethods<StaticBounds>]> {
+def LimitOp : Op<My_Dialect, "limit", [Pure, DeclareOpInterfaceMethods<StaticBounds>]> {
  let summary = "Clamp an i32 and return a range-refined integer value";
  let arguments = (ins I32:$input, BoundsAttr:$bounds);
  let results = (outs RangeType:$result);
@@ -141,9 +141,9 @@ LogicalResult BoundsAttr::verify(function_ref<InFlightDiagnostic()> emitError, i
 <!-- irdef-invalid: mismatched-bounds | result range must match bounds attribute -->
 ```text
 module {
-  func.func @bad(%x: i32) -> !lesson.range<-4, 8> {
-    %r = lesson.limit %x bounds(#lesson.bounds<-4, 7>) : !lesson.range<-4, 8>
-    return %r : !lesson.range<-4, 8>
+  func.func @bad(%x: i32) -> !my.range<-4, 8> {
+    %r = my.limit %x bounds(#my.bounds<-4, 7>) : !my.range<-4, 8>
+    return %r : !my.range<-4, 8>
   }
 }
 ```
@@ -171,7 +171,7 @@ int64_t LimitOp::getMaximum() { return getBounds().getUpper(); }
 
 ## 5. 类型身份与共享存储
 
-一万个 Value 都可能使用 `!lesson.range<-4,7>`。若每个 Value 都复制一份区间数据，既浪费存储，也不利于比较。MLIR 因此在同一个 Context 中按类型种类与参数共享存储，这一机制称为 uniquing。
+一万个 Value 都可能使用 `!my.range<-4,7>`。若每个 Value 都复制一份区间数据，既浪费存储，也不利于比较。MLIR 因此在同一个 Context 中按类型种类与参数共享存储，这一机制称为 uniquing。
 
 对于当前类型，可以沿一次请求理解：
 
@@ -186,9 +186,9 @@ int64_t LimitOp::getMaximum() { return getBounds().getUpper(); }
 
 <!-- source-example: uniquing -->
 ```cpp
-auto a = lesson::RangeType::get(&context, -4, 7);
-auto b = lesson::RangeType::get(&context, -4, 7);
-auto c = lesson::RangeType::get(&context, -4, 8);
+auto a = my::RangeType::get(&context, -4, 7);
+auto b = my::RangeType::get(&context, -4, 7);
+auto c = my::RangeType::get(&context, -4, 8);
 llvm::outs() << "same_parameters=" << (a == b) << " different_parameters=" << (a == c) << "\n";
 ```
 
@@ -210,7 +210,7 @@ same_parameters=1 different_parameters=0
 
 <!-- source-example: checked-construction -->
 ```cpp
-auto invalid = lesson::RangeType::getChecked(
+auto invalid = my::RangeType::getChecked(
     [&]() { return emitError(UnknownLoc::get(&context)); }, &context, int64_t(8), int64_t(7));
 llvm::outs() << "invalid_is_null=" << !invalid << "\n";
 ```
@@ -228,8 +228,8 @@ llvm::outs() << "invalid_is_null=" << !invalid << "\n";
 这会带来实际影响：
 
 ```text
-%r : !lesson.range<-4,7>
-  → 不能自动当作 !lesson.range<-4,8>
+%r : !my.range<-4,7>
+  → 不能自动当作 !my.range<-4,8>
   → 也不能自动交给只接受已有整数类型的 arith.addi
 ```
 
@@ -256,7 +256,7 @@ BoundsAttr(-4,7)
 
 ## 理解检查
 
-依次判断三种变化：属性变成 `<8,7>`；属性不变但结果类型改成 `<-4,8>`；新增操作声明产生 `!lesson.range<-4,7>`，实际 lowering 却返回 100。前两项可由本章哪一层验证发现？第三项为什么还需要语义实现及行为检查？
+依次判断三种变化：属性变成 `<8,7>`；属性不变但结果类型改成 `<-4,8>`；新增操作声明产生 `!my.range<-4,7>`，实际 lowering 却返回 100。前两项可由本章哪一层验证发现？第三项为什么还需要语义实现及行为检查？
 
 后面的 [Region 操作](./regions_assembly)讨论把一段计算放入操作内部。它先使用普通整数，不要求先熟悉本章的类型存储实现。
 

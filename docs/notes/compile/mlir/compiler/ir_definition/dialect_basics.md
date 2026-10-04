@@ -1,10 +1,10 @@
 ---
-order: 1
-title: 01：自定义操作与 Dialect 接入
-updated: 2026-10-01
+order: 0
+title: 自定义操作与 Dialect 接入
+updated: 2026-10-02
 ---
 
-# 01：自定义操作与 Dialect 接入
+# 自定义操作与 Dialect 接入
 
 写 Pass 时，我们已经会找到一条 `arith.addi`，取得它的输入，再替换它的结果。那时，加法操作是现成的：框架知道它的名字、输入输出和合法形式，变换只需要使用这些信息。
 
@@ -325,7 +325,7 @@ module {
 
 这就是定义与变换的连接：**定义使一种计算具有可构造、可检查、可访问的表示；变换再根据它的含义，将这份表示改成下一阶段需要的形式。** 生成 AddOp 类承担前一项工作，不能自动替我们完成后一项。
 
-当前最小工程尚未加入这条 Pattern。接下来直接进入[操作定义：语义、字段与验证](../../compiler/ir_definition/op_definition)，其中用 clamp 给出实际的 Pattern 展开，并继续解释静态属性与验证。这里不再另建一套以 my.add 重复各项机制的课程。即使变成了 `arith.addi`，仍需后续编译路径或执行设施才能得到机器上的运行结果。
+当前最小工程尚未加入这条 Pattern。接下来直接进入[操作定义：语义、字段与验证](./op_definition)，其中用 clamp 给出实际的 Pattern 展开，并继续解释静态属性与验证。这里不再另建一套以 my.add 重复各项机制的课程。即使变成了 `arith.addi`，仍需后续编译路径或执行设施才能得到机器上的运行结果。
 
 读到这里，可以用下面两个小变化检查自己建立的关系：
 
@@ -342,8 +342,8 @@ module {
 
 继续查阅可以按具体问题选择：
 
-- 更多字段与验证关系：[操作定义](../../compiler/ir_definition/op_definition)。
-- 文本怎样变成对象，再打印回来：[解析与打印](../../compiler/ir_definition/assembly_format)。
+- 更多字段与验证关系：[操作定义](./op_definition)。
+- 文本怎样变成对象，再打印回来：[解析与打印](./assembly_format)。
 - ODS 的准确字段与生成规则：[固定版本 Operations 文档](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/docs/DefiningDialects/Operations.md)。
 - 工程的生成、编译与接入：[固定版本 Creating a Dialect](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/docs/Tutorials/CreatingADialect.md)。
 

@@ -1,7 +1,7 @@
 ---
 order: 5
 title: 解析与打印：文本和 IR 对象的对应
-updated: 2026-10-01
+updated: 2026-10-02
 ---
 
 # 解析与打印：文本和 IR 对象的对应
@@ -18,7 +18,7 @@ updated: 2026-10-01
 ```text
 module {
   func.func @same(%x: i32) -> i32 {
-    %r = lesson.identity same %x {tag = "demo"} : i32
+    %r = my.identity same %x {tag = "demo"} : i32
     return %r : i32
   }
 }
@@ -27,7 +27,7 @@ module {
 这条操作的语法包含一个固定关键字 same、一个输入引用、一个额外属性，以及类型。可以把文本与对象的对应写成：
 
 ```text
-lesson.identity same %x {tag = "demo"} : i32
+my.identity same %x {tag = "demo"} : i32
                   │   │       │           │
              固定语法 输入引用 静态属性    类型信息
                        ↓       ↓           ↓
@@ -53,7 +53,7 @@ let assemblyFormat = "`same` $input attr-dict `:` type($input)";
 
 <!-- source-example: manual-op -->
 ```text
-def IdentityOp : Op<Lesson_Dialect, "identity", [Pure]> {
+def IdentityOp : Op<My_Dialect, "identity", [Pure]> {
  let arguments = (ins I32:$input);
  let results = (outs I32:$result);
  let hasCustomAssemblyFormat = 1;
@@ -132,13 +132,13 @@ Parser 也可以检查自己读取的语法要求，但结构与语义约束仍�
 在已构建工具的目录中，将第一节输入保存为 `assembly.mlir`，运行：
 
 ```bash
-./lesson-opt assembly.mlir --mlir-print-op-generic
+./my-opt assembly.mlir --mlir-print-op-generic
 ```
 
 其中操作行变为：
 
 ```text
-%0 = "lesson.identity"(%arg0) {tag = "demo"} : (i32) -> i32
+%0 = "my.identity"(%arg0) {tag = "demo"} : (i32) -> i32
 ```
 
 通用语法直接写操作名、operand、属性和输入输出类型，不需要 same 关键字。读取这种写法时，框架使用通用 parser，不进入本例读取 same 的方法；形成对象之后仍接受 identity 的操作约束检查。
@@ -154,8 +154,8 @@ Parser 也可以检查自己读取的语法要求，但结构与语义约束仍�
 可以将通用输出再次输入工具：
 
 ```bash
-./lesson-opt assembly.mlir --mlir-print-op-generic > generic.mlir
-./lesson-opt generic.mlir
+./my-opt assembly.mlir --mlir-print-op-generic > generic.mlir
+./my-opt generic.mlir
 ```
 
 正常打印会重新得到带 same 的格式，参数名可能规范化。判断往返是否正确，应看输入引用、结果使用、类型和 tag 是否保留，而不要求临时名字完全恢复。

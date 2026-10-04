@@ -1,18 +1,18 @@
 ---
 order: 4
 title: Region 操作：执行协议、传值与验证
-updated: 2026-10-01
+updated: 2026-10-02
 ---
 
 # Region 操作：执行协议、传值与验证
 
 前面的 clamp 把一项标量计算表达为操作。函数、循环和设备执行区域还需要容纳一段内部程序：操作不仅有输入和结果，也拥有 Region。
 
-本章定义一个教学用的 `lesson.scope`，用来包装并执行一次内部计算。重点是确定四件事：什么时候进入区域、输入怎样绑定、结果怎样返回，以及哪些结构与引用合法。例子先使用普通 i32，类型与属性的自定义存储不参与这条主线。
+本章定义一个教学用的 `my.scope`，用来包装并执行一次内部计算。重点是确定四件事：什么时候进入区域、输入怎样绑定、结果怎样返回，以及哪些结构与引用合法。例子先使用普通 i32，类型与属性的自定义存储不参与这条主线。
 
 ## 1. 区域语义与数据传递
 
-我们为 scope 约定：它有一个非空 Region，其中恰好一个 Block；进入时将输入按位置绑定到 Block 参数，执行其中的计算，最后把 `lesson.yield` 的值传给父操作结果。它不允许内部直接捕获外部 SSA 值。
+我们为 scope 约定：它有一个非空 Region，其中恰好一个 Block；进入时将输入按位置绑定到 Block 参数，执行其中的计算，最后把 `my.yield` 的值传给父操作结果。它不允许内部直接捕获外部 SSA 值。
 
 下面把已经熟悉的 clamp 放进去：
 
@@ -20,10 +20,10 @@ updated: 2026-10-01
 ```text
 module {
   func.func @clip_inside(%x: i32) -> i32 {
-    %r = "lesson.scope"(%x) ({
+    %r = "my.scope"(%x) ({
     ^bb0(%local: i32):
-      %clipped = lab.clamp %local bounds(-4, 7) : i32
-      lesson.yield %clipped : i32
+      %clipped = my.clamp %local bounds(-4, 7) : i32
+      my.yield %clipped : i32
     }) : (i32) -> i32
     return %r : i32
   }
@@ -53,14 +53,14 @@ Region 本身提供容器，不规定执行次数或输入输出绑定。`scf.fo
 
 <!-- source-example: scope-ops -->
 ```text
-def ScopeOp : Op<Lesson_Dialect, "scope", [SingleBlock, IsolatedFromAbove, RecursiveMemoryEffects]> {
+def ScopeOp : Op<My_Dialect, "scope", [SingleBlock, IsolatedFromAbove, RecursiveMemoryEffects]> {
  let arguments = (ins Variadic<AnyType>:$inputs);
  let results = (outs Variadic<AnyType>:$outputs);
  let regions = (region AnyRegion:$body);
  let hasVerifier = 1;
  let hasRegionVerifier = 1;
 }
-def YieldOp : Op<Lesson_Dialect, "yield", [Pure, Terminator, HasParent<"ScopeOp">]> {
+def YieldOp : Op<My_Dialect, "yield", [Pure, Terminator, HasParent<"ScopeOp">]> {
  let arguments = (ins Variadic<AnyType>:$values);
  let assemblyFormat = "attr-dict ($values^ `:` type($values))?";
 }
@@ -70,7 +70,7 @@ def YieldOp : Op<Lesson_Dialect, "yield", [Pure, Terminator, HasParent<"ScopeOp"
 
 `SingleBlock` 限制 Region 的 Block 数量；本版本该 trait 允许零或一个 Block，所以本操作还要补充“body 非空”的检查。`IsolatedFromAbove` 禁止相应的外部 SSA 捕获。
 
-`lesson.yield` 是区域的出口。`Terminator` 给它 Block 终结操作的结构角色，`HasParent<"ScopeOp">` 限制其所在父操作。即使 yield 没有普通结果，它也不能像无用的算术操作一样被删除，否则区域将失去约定的出口。
+`my.yield` 是区域的出口。`Terminator` 给它 Block 终结操作的结构角色，`HasParent<"ScopeOp">` 限制其所在父操作。即使 yield 没有普通结果，它也不能像无用的算术操作一样被删除，否则区域将失去约定的出口。
 
 这些结构设施让框架能够检查 IR 的形状；“进入一次、按位置绑定、按位置传出”仍是 scope 的语义协议，需要后续执行或 lowering 落实。
 
@@ -88,7 +88,7 @@ scope 的输入类型序列 == 入口 Block 的参数类型序列
 
 ### 3.2 出口结果对应
 
-内部操作验证完成后，再确认 Block 最后确实是 lesson.yield，并检查：
+内部操作验证完成后，再确认 Block 最后确实是 my.yield，并检查：
 
 ```text
 yield 的输入类型序列 == scope 的结果类型序列
@@ -109,10 +109,10 @@ LogicalResult ScopeOp::verify() {
 LogicalResult ScopeOp::verifyRegions() {
  Block &entry = getBody().front();
  if (entry.empty())
-   return emitOpError("requires a lesson.yield terminator");
+   return emitOpError("requires a my.yield terminator");
  auto yield = dyn_cast<YieldOp>(entry.back());
  if (!yield)
-   return emitOpError("requires a lesson.yield terminator");
+   return emitOpError("requires a my.yield terminator");
  if (yield.getValues().getTypes() != getOutputs().getTypes())
    return emitOpError("yield types must match result types");
  return success();
@@ -129,9 +129,9 @@ LogicalResult ScopeOp::verifyRegions() {
 ```text
 module {
   func.func @bad(%x: i32) -> i64 {
-    %r = "lesson.scope"(%x) ({
+    %r = "my.scope"(%x) ({
     ^bb0(%local: i32):
-      lesson.yield %local : i32
+      my.yield %local : i32
     }) : (i32) -> i64
     return %r : i64
   }
@@ -161,9 +161,9 @@ module {
 ```text
 module {
   func.func @swap(%x: i32, %y: i64) -> (i64, i32) {
-    %r:2 = "lesson.scope"(%x, %y) ({
+    %r:2 = "my.scope"(%x, %y) ({
     ^bb0(%a: i32, %b: i64):
-      lesson.yield %b, %a : i64, i32
+      my.yield %b, %a : i64, i32
     }) : (i32, i64) -> (i64, i32)
     return %r#0, %r#1 : i64, i32
   }
@@ -180,15 +180,15 @@ module {
 ```text
 module {
   func.func @empty() {
-    "lesson.scope"() ({
-      lesson.yield
+    "my.scope"() ({
+      my.yield
     }) : () -> ()
     return
   }
 }
 ```
 
-这里没有输入和结果，但 Region 仍有一个 Block 和所需出口。零个结果、空 Block、空 Region 是三种不同结构。yield 的声明式格式使用可选组，在 values 为空时省略值与类型，得到裸 `lesson.yield`。
+这里没有输入和结果，但 Region 仍有一个 Block 和所需出口。零个结果、空 Block、空 Region 是三种不同结构。yield 的声明式格式使用可选组，在 values 为空时省略值与类型，得到裸 `my.yield`。
 
 ### 多组可变字段的分段问题
 

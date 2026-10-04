@@ -1,12 +1,12 @@
 ---
 order: 1
 title: 操作定义：语义、字段与验证
-updated: 2026-10-01
+updated: 2026-10-02
 ---
 
 # 操作定义：语义、字段与验证
 
-[my.add 导读](../../tutorials/my_dialect/01_minimal_dialect)已经说明，一份操作定义会生成 C++ 能力，并通过注册交给框架使用。本章继续向前：当一种计算包含输入、静态参数和额外约束时，应该怎样设计它的表示，怎样保证不同入口构造的对象都遵守约定？
+[my.add 导读](./dialect_basics)已经说明，一份操作定义会生成 C++ 能力，并通过注册交给框架使用。本章继续向前：当一种计算包含输入、静态参数和额外约束时，应该怎样设计它的表示，怎样保证不同入口构造的对象都遵守约定？
 
 我们用整数区间限制作为例子。它比加法多了两个静态参数，也产生了一个需要检查的跨字段关系；这些需求会自然引出 Attribute、verifier 和 builder。生成文件的包含与工具注册沿用导读中的接入过程，本章集中解释操作本身。
 
@@ -22,13 +22,13 @@ x > upper  → 返回 upper
 
 以 `[-4, 7]` 为例，输入 -9、2、12 分别得到 -4、2、7。这里的上下界必须有序；`[7, 7]` 也是合法区间，所有输入都得到 7。
 
-给它一个操作名 `lab.clamp`，程序可以写成：
+给它一个操作名 `my.clamp`，程序可以写成：
 
-<!-- lab-example: op-definition-input -->
+<!-- opdef-example: op-definition-input -->
 ```text
 module {
   func.func @clip(%x: i32) -> i32 {
-    %r = lab.clamp %x bounds(-4, 7) : i32
+    %r = my.clamp %x bounds(-4, 7) : i32
     return %r : i32
   }
 }
@@ -43,14 +43,14 @@ module {
 观察这一行：
 
 ```text
-%r = lab.clamp %x bounds(-4, 7) : i32
+%r = my.clamp %x bounds(-4, 7) : i32
 ```
 
 `%x` 表示计算时由其他地方提供的输入值；`-4` 和 `7` 是这条操作保存的固定参数；`%r` 是交给后续计算的结果。对应的结构为：
 
 ```text
 函数参数 %x ──→ operand 0
-               lab.clamp   ──→ result 0 ──→ return
+               my.clamp   ──→ result 0 ──→ return
                lower = -4
                upper =  7
 ```
@@ -63,11 +63,11 @@ module {
 
 ## 3. ODS 字段声明与生成接口
 
-下面是实际操作定义。所属 `Lab_Dialect` 使用名称 `lab` 和 C++ 命名空间 `mlir::lab`，其生成、编译和注册方式与 my.add 一致。
+下面是实际操作定义。所属 `My_Dialect` 使用名称 `my` 和 C++ 命名空间 `mlir::my`，其生成、编译和注册方式与 my.add 一致。
 
 <!-- source-example: clamp -->
 ```text
-def Lab_ClampOp : Op<Lab_Dialect, "clamp", [Pure]> {
+def My_ClampOp : Op<My_Dialect, "clamp", [Pure]> {
   let summary = "Clamp a signed i32 value to inclusive constant bounds";
   let description = [{
     Interpret input, lower and upper as signed 32-bit integers.
@@ -127,11 +127,11 @@ LogicalResult ClampOp::verify() {
 
 ### 4.2 完整验证与失败位置
 
-<!-- lab-invalid: op-definition-reversed | requires lower <= upper (signed i32) -->
+<!-- opdef-invalid: op-definition-reversed | requires lower <= upper (signed i32) -->
 ```text
 module {
   func.func @bad(%x: i32) -> i32 {
-    %r = lab.clamp %x bounds(8, 7) : i32
+    %r = my.clamp %x bounds(8, 7) : i32
     return %r : i32
   }
 }
@@ -140,7 +140,7 @@ module {
 工具会拒绝这段程序，诊断中包含：
 
 ```text
-'lab.clamp' op requires lower <= upper (signed i32)
+'my.clamp' op requires lower <= upper (signed i32)
 ```
 
 若缺少 lower，或其属性类型不是 i32，则会先被字段检查拒绝。对于本例，生成的 `verifyInvariants()` 先检查生成约束，再调用手写的 `verify()`；进入上面的比较时，所需字段已经满足相应前提。
@@ -157,7 +157,7 @@ module {
 
 <!-- source-example: builder -->
 ```cpp
-auto clamp = builder.create<lab::ClampOp>(
+auto clamp = builder.create<my::ClampOp>(
     loc, builder.getI32Type(), x,
     builder.getI32IntegerAttr(invalid ? 8 : -4), builder.getI32IntegerAttr(7));
 builder.create<func::ReturnOp>(loc, clamp.getResult());
@@ -198,9 +198,9 @@ result  = min_signed(bounded, upper)
 
 <!-- source-example: expand -->
 ```cpp
-struct ExpandClamp : OpRewritePattern<lab::ClampOp> {
+struct ExpandClamp : OpRewritePattern<my::ClampOp> {
   explicit ExpandClamp(MLIRContext *context) : OpRewritePattern(context, 1) {}
-  LogicalResult matchAndRewrite(lab::ClampOp op,
+  LogicalResult matchAndRewrite(my::ClampOp op,
                                PatternRewriter &rewriter) const override {
     auto lower = rewriter.create<arith::ConstantOp>(op.getLoc(), op.getLowerAttr());
     auto upper = rewriter.create<arith::ConstantOp>(op.getLoc(), op.getUpperAttr());
@@ -223,13 +223,13 @@ maxsi 的结果  → minsi 的输入
 在已构建工具的目录中，将第一节程序保存为 `input.mlir`，下面的命令运行对应 Pass：
 
 ```bash
-./lab-dialect-opt input.mlir \
-  --pass-pipeline='builtin.module(func.func(lab-expand-clamp))' --verify-each
+./my-opt input.mlir \
+  --pass-pipeline='builtin.module(func.func(my-expand-clamp))' --verify-each
 ```
 
 实际输出为：
 
-<!-- lab-example: op-definition-expanded -->
+<!-- opdef-example: op-definition-expanded -->
 ```text
 module {
   func.func @clip(%arg0: i32) -> i32 {
@@ -248,11 +248,11 @@ module {
 
 同一条 clamp 可以按简洁格式或通用格式打印。正常解析后输出如下：
 
-<!-- lab-example: op-definition-custom -->
+<!-- opdef-example: op-definition-custom -->
 ```text
 module {
   func.func @clip(%arg0: i32) -> i32 {
-    %0 = lab.clamp %arg0 bounds(-4, 7) : i32
+    %0 = my.clamp %arg0 bounds(-4, 7) : i32
     return %0 : i32
   }
 }
@@ -260,18 +260,18 @@ module {
 
 使用 `--mlir-print-op-generic` 时输出为：
 
-<!-- lab-example: op-definition-generic -->
+<!-- opdef-example: op-definition-generic -->
 ```text
 "builtin.module"() ({
   "func.func"() <{function_type = (i32) -> i32, sym_name = "clip"}> ({
   ^bb0(%arg0: i32):
-    %0 = "lab.clamp"(%arg0) <{lower = -4 : i32, upper = 7 : i32}> : (i32) -> i32
+    %0 = "my.clamp"(%arg0) <{lower = -4 : i32, upper = 7 : i32}> : (i32) -> i32
     "func.return"(%0) : (i32) -> ()
   }) : () -> ()
 }) : () -> ()
 ```
 
-重点是 `"lab.clamp"(%arg0)` 只有一个 operand；上下界在本版本的 `<{...}>` 属性/Properties 表示中。使用生成的 `getLowerAttr()` 访问它们，可以避免消费者猜测属性存放在哪个内部容器中。
+重点是 `"my.clamp"(%arg0)` 只有一个 operand；上下界在本版本的 `<{...}>` 属性/Properties 表示中。使用生成的 `getLowerAttr()` 访问它们，可以避免消费者猜测属性存放在哪个内部容器中。
 
 两种语法汇入相同对象，接受同一组验证规则。通用写法不会绕过上下界检查。文本与字段之间的完整过程在[解析与打印](./assembly_format)展开，本章不再重复生成 parser 的全部实现。
 
@@ -285,4 +285,4 @@ module {
 
 本章按 LLVM `llvmorg-20.1.8` 核对。关键代码来自[操作定义工程](https://github.com/jnfkdsn/aicompiler/tree/main/llvm-mlir/05-op-definition)，工程保存构建、完整外壳与正反例；本文展示的展开输出经过工具验证，未执行目标机器码。
 
-固定版本的 [ODS 文档](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/docs/DefiningDialects/Operations.md)用于确认字段、builder 与验证顺序；[my.add 导读](../../tutorials/my_dialect/01_minimal_dialect)解释定义如何生成并注册到工具，无需在这里再走一遍工程链。
+固定版本的 [ODS 文档](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/docs/DefiningDialects/Operations.md)用于确认字段、builder 与验证顺序；[my.add 导读](./dialect_basics)解释定义如何生成并注册到工具，无需在这里再走一遍工程链。
