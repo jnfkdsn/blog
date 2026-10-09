@@ -11,6 +11,9 @@ Triton 笔记用于对照 CUDA 学习更高层的 GPU 编程抽象：块级张�
 1. [Python 前置知识](/notes/triton/python_basic)
 2. [Triton 基础](/notes/triton/triton_basic)
 3. [Triton GEMM 优化](/posts/triton_gemm)
+4. [Triton 加法算子的编译路径](./compiler_path)：固定 v3.2.0，沿块、encoding、load lowering 与 NVIDIA pipeline 阅读源码。
+
+5. [Triton-Ascend 编译路径](./ascend_compiler_path)：固定 v3.2.1，追踪 adapter、NPU 编译器与运行时的交接。
 
 ## 和 CUDA 的对照
 

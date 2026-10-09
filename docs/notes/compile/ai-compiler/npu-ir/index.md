@@ -45,6 +45,10 @@ NPU IR 算子融合的核心任务：
 | [Memory、Buffer 与 NPU 存储层次](/notes/compile/ai-compiler/npu-ir/memory_buffer) | GM/UB/L1/L0、lifetime、workspace、memory planning |
 | [NPU Lowering 约束](/notes/compile/ai-compiler/npu-ir/lowering_constraints) | 融合结果下沉到 NPU kernel 的约束 |
 
+## 固定项目源码入口
+
+[沿 HIVM 向量加法追踪定义与消费](./source_path)从固定提交的 VAdd 进入 ODS、生成配置、库接口、Conversion 和 Host 集成测试。与前面的概念综述互补；当前是源码核验，没有 NPU 实测。
+
 ## 一条融合 pass 的基本链路
 
 ```text
