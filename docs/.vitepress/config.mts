@@ -42,6 +42,8 @@ export default withSidebar(vitePressConfig, [
   {
     documentRootPath: '/docs',
     scanStartPath: 'notes',
+    collapsed: true,
+    collapseDepth: 1,
     excludeFilesByFrontmatterFieldName: 'excludeFromSidebar',
     resolvePath: '/notes/',
     useTitleFromFileHeading: true,
@@ -54,6 +56,8 @@ export default withSidebar(vitePressConfig, [
   {
     documentRootPath: '/docs',
     scanStartPath: 'posts',
+    collapsed: true,
+    collapseDepth: 1,
     resolvePath: '/posts/',
     useTitleFromFileHeading: true,
     useFolderTitleFromIndexFile: true,
@@ -65,6 +69,8 @@ export default withSidebar(vitePressConfig, [
   {
     documentRootPath: '/docs',
     scanStartPath: 'projects',
+    collapsed: true,
+    collapseDepth: 1,
     resolvePath: '/projects/',
     useTitleFromFileHeading: true,
     useFolderTitleFromIndexFile: true,
