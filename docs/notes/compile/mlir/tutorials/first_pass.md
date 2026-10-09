@@ -319,4 +319,4 @@ struct RemoveAddZero : OpRewritePattern<arith::AddIOp> {
 - [PassRegistry.h](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/include/mlir/Pass/PassRegistry.h)：`PassRegistration` 如何登记构造方法。
 - [MlirOptMain.cpp](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/lib/Tools/mlir-opt/MlirOptMain.cpp)：解析输入、构建并运行 pipeline 的工具入口。
 - [Pass.cpp](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/lib/Pass/Pass.cpp)：PassManager 的对象约束与执行。
-- [TestingGuide](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/docs/TestingGuide.md)、[FileCheck](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/llvm/docs/CommandGuide/FileCheck.rst)：测试文件、指令与匹配语义。
+- [TestingGuide](https://mlir.llvm.org/getting_started/TestingGuide/)、[FileCheck](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/llvm/docs/CommandGuide/FileCheck.rst)：测试文件、指令与匹配语义。
