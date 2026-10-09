@@ -1,7 +1,7 @@
 ---
 order: 30
 title: 编译器机制
-updated: 2026-09-14
+updated: 2026-10-04
 excludeFromSidebar: true
 ---
 
@@ -14,7 +14,12 @@ excludeFromSidebar: true
 | 模块 | 需要理解的过程 | 当前内容 |
 |---|---|---|
 | [IR 变换基础](./transforms/) | 一次局部修改怎样进入 pipeline，被应用并形成可检查结果 | Pass、C++ IR API、PatternRewriter、改写驱动；链接小 Pass 贯通教程 |
-| [定义 IR 抽象](./ir_definition/) | 一项计算怎样成为工具能读取、构造、验证和处理的操作 | ODS 与操作定义、Trait / Interface、自定义 Type / Attr、Region / 可变参数及解析验证 |
+| [定义 IR 抽象](./ir_definition/) | 一项计算怎样成为工具能读取、构造、验证和处理的操作 | my.add 接入导读、ODS 与操作定义、Trait / Interface、自定义 Type / Attr、Region / 可变参数及解析验证 |
+| [IR 转换与目标合法性](./conversion/) | 将已有表示转为后续阶段接受的形式，并判断转换是否完成 | 操作与类型转换、目标合法性、materialization、调用与区域边界；进阶参考单独阅读 |
+| [Bufferization 与内存生命周期](./memory/) | 张量值怎样选择存储，并在跨函数与分支后正确释放 | 复用与复制、One-Shot 决策、默认所有权协议及条件释放 |
+| [结构化优化与调度](./optimization/) | 组织局部工作并保留依赖和边界 | 六篇：分块/融合/交换、向量化、Transform 协议与实际性能对照 |
+| [分析事实与优化合法性](./analysis/) | 支配、内存依赖和数据流结论怎样支撑优化 | 五篇串联事实查询、缓存失效、传播与 CSE/DCE/LICM，提供本机对照 |
+| [CPU Lowering 与执行](./lowering/) | 从结构化计算到循环、低层函数与运行结果 | 循环展开、descriptor/ABI、C wrapper、translation、JIT/AOT；链接 CPU 贯通教程 |
 
 读过 Pass 系列后，可以先用[变换基础总览](./transforms/)把各章放回同一条调用链，再进入[操作定义](./ir_definition/op_definition)。具体学习状态与阶段标准见[学习路径](../learning_path)。
 
@@ -39,9 +44,15 @@ excludeFromSidebar: true
 
 ## 后续目录怎样增长
 
-目前只为已有内容建立 `transforms/` 与 `ir_definition/`。后续分析、转换、内存和优化形成独立章节组时，再分别建立 `analysis/`、`conversion/`、`memory/`、`optimization/` 等模块，不提前创建空目录或没有正文的链接。
+`transforms/`、`ir_definition/`、`conversion/`、`memory/`、`lowering/` 与 `analysis/` 的主线已有正文。自定义Bufferization接口和形状/区域/存储扩展已有正文与作者工程。结构化优化六篇已有，Vector/Transform 与固定目标性能证据已连接；目标后端五篇继续解释设备映射与编译。
 
-`transforms/` 在这里表示 IR 变换的共用基础；具体分析算法、内存转换和循环优化在相应模块深入。`ir_definition/` 保存操作、类型、属性及其契约的定义机制；各标准方言具体语义仍在 `dialects/` 查询。
+| 模块入口 | 已有主线 |
+|---|---|
+| [GPU/NPU 后端](./targets/) | 设备映射、布局、同步与 Host/Device 编译 |
+
+目录入口说明前置、章节与完成边界；现有计划范围已展开，个人理解与独立实现按学习路径推进。
+
+`transforms/` 在这里表示 IR 变换的共用基础；具体分析算法、内存转换和循环优化在相应模块深入。`ir_definition/` 保存操作、类型、属性及其契约的定义机制；`conversion/` 保存表示转换与目标合法性；各标准方言具体语义仍在 `dialects/` 查询。
 
 [小 Pass 教程](../tutorials/first_pass)继续保存在贯通教程目录，可由变换基础模块连续读到。知识归档依照职责，学习顺序通过链接表达，无需复制同一篇正文。
 

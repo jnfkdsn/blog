@@ -1,7 +1,7 @@
 ---
 order: 10
 title: IR 变换基础
-updated: 2026-09-13
+updated: 2026-10-04
 excludeFromSidebar: true
 ---
 
@@ -93,6 +93,14 @@ Pass 返回；PassManager 验证 IR；工具打印结果
 
 前面一直使用已经定义好的 `arith.addi`。接下来进入[定义 IR 抽象](../ir_definition/)：操作的输入、结果、属性、类型约束和访问器从哪里来，框架怎样验证它，通用变换又怎样获取它的语义信息。
 
-两部分会在 `lab.clamp` 中会合：操作定义规定区间限制的含义与合法形式，已有的 Pattern/Pass 将它展开成 arith 运算。之后的 Trait / Interface、Dialect Conversion 与分析机制继续建立在这条链路上。
+两部分会在 `my.clamp` 中会合：操作定义规定区间限制的含义与合法形式，已有的 Pattern/Pass 将它展开成 arith 运算。之后的 Trait / Interface、Dialect Conversion 与分析机制继续建立在这条链路上。
 
 模块范围对应[覆盖表 M01、M04、M06 与 X02](../../coverage)，个人学习状态仍由[学习路径](../../learning_path)记录。总览串联已学机制，不额外增加阶段完成要求。
+
+## 声明式规则扩展
+
+[DRR、PDL 与 PDLL](./declarative_patterns)沿同一条 x+0 规则，对照生成 C++ 与规则 IR 两种路径，并核对真实 driver 输出。理解 Pattern/driver 后按需阅读，不把规则语言作为小 Pass 的前置。
+
+## 复杂结构维护
+
+[CFG克隆、移动与符号维护](./ir_maintenance)沿四Block函数说明SSA/CFG映射、嵌套捕获、SymbolRef与移动合法性，提供真实重命名、非法移动/恢复和未知作用域保护。它是IR API的进阶回访，不改变首次学习顺序。
