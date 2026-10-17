@@ -1,0 +1,133 @@
+---
+order: 6
+title: 自动调度、测量数据库与外部实现
+updated: 2026-10-17
+---
+
+# 自动调度、测量数据库与外部实现
+
+上一章改变一个块宽就观察到不同性能。如果再加入多层分块、循环位置、缓存和并行划分，候选方案会迅速增多。同时，某个已有库可能比自行生成的方案更好。
+
+这一章围绕同一个问题展开：**怎样为一段计算选择实现，并让选择可以复用？** 先看生成代码内部的自动调度，再看外部实现如何参与完整模型。
+
+## 1. 从人工 Schedule 到候选空间
+
+手工方案中，开发者明确写出 `split/reorder/vectorize`。对于32列，可能考虑块宽4、8、16；归约维也可能分块；不同块还可以安排到不同并行层次。
+
+候选空间不应该是任意改写的全集。首先需要保留语义与结构约束，再结合目标限制产生合理候选。例如越界必须有正确处理，归约不能随意并行，某种指令要求的维度和布局必须满足。
+
+**规则调度**将常见的结构判断与变换策略编码下来，在遇到某类计算时生成合适方案。TVM的DLight提供这一类能力，具体规则和支持目标依版本而定。
+
+**搜索调度**则在规则和可变决策形成的空间里探索多个方案，并使用评估结果更新选择。MetaSchedule将调度规则、候选生成、构建、测量和记录组织起来。
+
+两者并不矛盾：规则限制和构造空间，搜索在空间中比较决策；一个系统也可以对不同操作采用不同策略。
+
+## 2. 构建、运行与反馈
+
+一个候选从“看起来可能更快”到“具有测量记录”，至少经历：
+
+```text
+生成合法schedule
+  → 应用到原始TensorIR
+  → 构建目标代码
+  → 在目标环境运行并测量
+  → 记录成功结果或失败原因
+```
+
+builder负责把候选变成可运行产物，runner负责测量。构建失败、资源超限和测量失败都是搜索需要处理的结果，不能把没有成功运行的候选当作最快实现。
+
+成本模型可以根据特征预测候选好坏，减少昂贵的实际测量次数。但预测不是执行证据，最终选择仍需与真实目标条件联系起来。
+
+本系列的小实验故意采用随机成本模型和有限8次trial，重点观察构建—测量—记录—复用的链路，没有把这8次搜索包装成生产级自动优化。
+
+## 3. 一次实际 MetaSchedule 搜索
+
+对前章的32×32 Matmul，核心调用为：
+
+```python
+database = ms.tune_tir(
+    mod=Matmul,
+    target="llvm -num-cores=1",
+    work_dir="tuning",
+    max_trials_global=8,
+    num_trials_per_iter=4,
+    num_tuning_cores=1,
+    cost_model="random",
+    strategy="replay-trace",
+    seed=0,
+    # 完整实验还显式限制builder/runner并发与测量次数
+)
+sch = ms.tir_integration.compile_tir(database, Matmul, "llvm -num-cores=1")
+```
+
+第一次固定运行生成了8条测量记录。取出的 schedule 再次编译执行，与NumPy结果比较通过，最大绝对误差约 `1.9e-6`。
+
+这一步非常重要：测量框架返回一个时间，不替代当前模型的正确性判断。教学实验另外检查选中程序的数值，并保留原始输入程序与最终schedule。
+
+trace记录的是从原程序到候选程序的变换和决定，数据库还要关联工作负载、目标等信息。复用时需要找到匹配问题，不能把一个矩阵大小的最快记录不加判断地套到另一个问题上。
+
+## 4. 测量范围与复用条件
+
+一个记录的意义依赖具体条件：shape、dtype、目标特征、线程配置、编译选项和测量环境。改变其中某项可能改变最优方案，甚至使原实现不适用。
+
+模型级性能还包括图调用、分配、布局转换和外部边界。如果某个单算子变快，却新增了两次大张量布局复制，整个模型可能更慢。因此最终仍要回到端到端测量。
+
+搜索本身也有成本。对只运行一次的小任务，大量调优不一定划算；对于长期重复部署的固定模型，提前测量并复用数据库则更有价值。
+
+数据库提供“这次问题曾经测过什么”的证据，而不是不带条件的性能真理。
+
+## 5. 外部函数的调用契约
+
+现在不让TVM生成本例全部数值循环，而是交给一个已注册函数。Relax可以表达：
+
+```python
+result = R.call_dps_packed(
+    "course.affine_relu",
+    (x, weight, bias),
+    out_sinfo=R.Tensor((2, 2), "float32"),
+)
+```
+
+模型层仍然知道结果结构，因此后续能够分配输出。被调用函数按约定接收输入以及目标输出存储，负责填入结果。
+
+观察实验注册一个Python/NumPy参考函数：
+
+```python
+@tvm.register_func("course.affine_relu")
+def affine_relu(x, weight, bias, output):
+    value = np.maximum(x.numpy() @ weight.numpy() + bias.numpy(), 0)
+    output.copyfrom(value)
+```
+
+运行时调用它，仍然得到 `[[0.5,7.5],[1.5,0]]`。这个实现有Python开销和数据拷贝，作用是让边界可见，不是高性能库示范。
+
+这里至少存在三项契约：名字如何解析到实现，参数及输出按什么顺序和形式传入，谁拥有和分配存储。真实设备库还需约定dtype、布局、设备、stream与同步等条件。
+
+## 6. 从单函数接入到 BYOC
+
+更完整的 **Bring Your Own Codegen（BYOC）** 接入不只是注册一个运行时函数。一般需要识别后端能处理的图区域，将其组织为外部编译单元，生成或调用相应编译器得到产物，再把运行时模块与模型调用连接起来。
+
+可以沿本例推演：
+
+```text
+识别 matmul + bias + relu 模式
+  → 检查dtype、shape、layout和目标支持条件
+  → 将支持区域交给外部codegen
+  → 模型图改为调用外部实现
+  → 运行时加载产物并传递输入/输出
+```
+
+如果只支持某种精度或激活，不能不加检查地匹配所有形状和dtype。区域之外的计算仍由其他实现完成，边界上的布局转换、workspace和同步也会影响收益。
+
+本轮实际运行的是前节的PackedFunc协议示例；完整BYOC分区与codegen机制通过固定源码确认，没有声称构建了新硬件后端。
+
+这两类实现选择最终回到同一条模型链：无论内部生成代码还是外部编译模块，模型执行都需要正确的形状、数据和调用契约。
+
+## 7. 推演与实践入口
+
+1. 为什么成本模型预测最快的候选仍需要构建、运行和数值检查？
+2. 一个32×32的调优记录，为什么不能无条件复用到任意矩阵？
+3. 外部函数返回正确数值，为什么还不能证明没有额外拷贝或同步开销？
+4. PackedFunc运行时接入与BYOC图分区/codegen各补充了什么能力？
+
+实验见 [TVM labs 的 tune 与 external](https://github.com/jnfkdsn/aicompiler/tree/main/tvm-e2e)。固定源码参考 [MetaSchedule集成](https://github.com/apache/tvm/blob/v0.20.0/python/tvm/meta_schedule/tir_integration.py)、[DLight](https://github.com/apache/tvm/tree/v0.20.0/python/tvm/dlight)、[RunCodegen](https://github.com/apache/tvm/blob/v0.20.0/src/relax/transform/run_codegen.cc) 与 [FuseOpsByPattern](https://github.com/apache/tvm/blob/v0.20.0/src/relax/transform/fuse_ops.cc)。
