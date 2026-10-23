@@ -181,4 +181,6 @@ offset、size、stride 的数量仍对应源的两个维度。结果类型省略
 
 ## 实现与查阅
 
+真实项目案例见 [Store 与 InsertSlice：冗余搬运的源头预防](/notes/compile/npu-ir/insert_slice_transfer)：切片写回后，完整 Tensor 值仍需要用 InsertSlice 表达，但不一定需要再次搬运数据。该篇结合 AscendNPU-IR 的第三方优化方案解释这一差别，可按兴趣阅读，不影响继续学习 reshape。
+
 [配套实验](https://github.com/jnfkdsn/aicompiler/tree/main/llvm-mlir/09-tensor-linalg)保留静态、步长、动态与降秩输入，验证局部和完整结果。固定版本的定义见 [TensorOps.td](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/include/mlir/Dialect/Tensor/IR/TensorOps.td) 中 ExtractSliceOp 与 InsertSliceOp；形状推导和验证见 [TensorOps.cpp](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/lib/Dialect/Tensor/IR/TensorOps.cpp)。
