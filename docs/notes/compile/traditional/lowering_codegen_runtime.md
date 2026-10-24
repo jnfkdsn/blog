@@ -233,9 +233,9 @@ Epilogue fusion 可以减少中间 tensor 和额外 kernel launch，但也可能
 
 对应学习材料：
 
-- [低精度数值与混合精度计算](/notes/cuda/low_precision)
-- [Tensor Core 编程](/notes/cuda/tensor_core)
-- [Ampere 异步拷贝与软件流水线](/notes/cuda/async_pipeline)
+- [低精度数值与混合精度计算](/notes/kernels/cuda/low_precision)
+- [Tensor Core 编程](/notes/kernels/cuda/tensor_core)
+- [Ampere 异步拷贝与软件流水线](/notes/kernels/cuda/async_pipeline)
 - [Tensor Core GEMM 实践](/posts/tensor_core_gemm)
 
 ## Register Allocation

@@ -9,7 +9,7 @@ tags: [cpp, cmake, linking, sanitizer, pybind11]
 
 本篇偏工程概览。如果“头文件提供声明、链接提供实现”仍难以连起来，先读[一个函数怎样从源码进入程序](./source_to_program)，它用同一个小程序逐步解释这些关系；宏与 `.inc` 另见[生成代码篇](./generated_cpp)。
 
-路线：[C++ 工程基础](/notes/cpp/)。本篇讲通用 CPU 工程；CUDA 扩展的 `.cu`、架构参数和 Torch 依赖见 [CUDA CMake 实践](/notes/cuda/cmake)。
+路线：[C++ 工程基础](/notes/cpp/)。本篇讲通用 CPU 工程；CUDA 扩展的 `.cu`、架构参数和 Torch 依赖见 [CUDA CMake 实践](/notes/kernels/cuda/cmake)。
 
 ## 从源文件到程序
 
@@ -120,7 +120,7 @@ benchmark 应固定输入规模、预热、重复测量，避免结果被优化�
 
 pybind11 暴露 C++ 函数时要明确参数类型、返回值所有权和异常转换。对传统带 GIL 的 CPython，pybind11 不会自动释放 GIL；长时间纯 C++ 计算可在明确不访问 Python 对象的范围内使用 `gil_scoped_release`，回调 Python 前要持有 GIL。free-threaded 构建有额外要求，不能把 GIL 当作所有环境中的全局业务锁。[pybind11 GIL 文档](https://pybind11.readthedocs.io/en/stable/advanced/misc.html#global-interpreter-lock-gil)
 
-借用 NumPy/Tensor 数据时确认 dtype、shape、stride、device、可写性与生命周期；零拷贝不等于没有所有权责任。异步工作不能只保存临时 Python 对象提供的裸地址。Torch extension 还要检查当前 stream 等框架约定，见 [CUDA 导读](/notes/cuda/cpp)。
+借用 NumPy/Tensor 数据时确认 dtype、shape、stride、device、可写性与生命周期；零拷贝不等于没有所有权责任。异步工作不能只保存临时 Python 对象提供的裸地址。Torch extension 还要检查当前 stream 等框架约定，见 [CUDA 导读](/notes/kernels/cuda/cpp)。
 
 ## 自查与练习
 

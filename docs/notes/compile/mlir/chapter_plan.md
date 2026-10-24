@@ -174,9 +174,9 @@ updated: 2026-10-04
 | 路径 | 文章 | 建议进入时机 |
 |---|---|---|
 | 前端路径 | [PyTorch 矩阵乘法到 Linalg](./tutorials/pipelines/frontend) | 第 3 站后可提前读转换片段；第 5 站后更容易串起边界 |
-| GPU 路径 | [Triton 加法编译路径](/notes/triton/compiler_path) | Vector、布局与 GPU 映射之后 |
-| NPU 桥接路径 | [Triton-Ascend 编译路径](/notes/triton/ascend_compiler_path) | Triton 表示与 NPU 约束之后 |
-| NPU 操作与消费 | [HIVM 向量加法源码路径](/notes/compile/ai-compiler/npu-ir/source_path) | IR 定义后可提前看 ODS；理解 NPU 约束后继续追变换和消费 |
+| GPU 路径 | [Triton 加法编译路径](/notes/compile/triton/compiler_path) | Vector、布局与 GPU 映射之后 |
+| NPU 桥接路径 | [Triton-Ascend 编译路径](/notes/compile/triton/ascend_compiler_path) | Triton 表示与 NPU 约束之后 |
+| NPU 操作与消费 | [HIVM 向量加法源码路径](/notes/compile/npu-ir/source_path) | IR 定义后可提前看 ODS；理解 NPU 约束后继续追变换和消费 |
 
 表格给出默认展开顺序；实践时先选一个项目完成一次有限修改，不要求四个项目全部通读。18 实验保存固定源码入口和阶段快照，源码检查与项目构建、运行分开记录。TVM 仍是 AI Compiler 总路线中的并行项目，不并入 MLIR 方言必读清单。
 
@@ -205,4 +205,4 @@ updated: 2026-10-04
 
 遇到新 API 时，先确认它在当前过程中改变哪个对象、提供什么事实；具体拼写和实现入口按文末资料查阅。主线能连起来后，再决定是否需要深入框架内部。
 
-目前的明确起点是第 1 站的[操作转换与目标合法性](./compiler/conversion/operation_conversion)。已经完成的 IR 定义基础按需回查，阅读这份新路线不要求从头重学。
+首次沿这条路线学习时，从第 1 站的[操作转换与目标合法性](./compiler/conversion/operation_conversion)开始；已掌握的部分可以跳过，IR 定义基础按需回查。

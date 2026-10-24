@@ -8,8 +8,8 @@ status: draft
 
 # Transpose 访存优化
 
-相关路线：[GPU 编程与算子优化知识地图](/notes/gpu-programming) / [CUDA 学习笔记](/notes/cuda/)  
-相关基础：[CUDA 基础语法](/notes/cuda/cuda_basic_syntax)
+相关路线：[算子编程与优化](/notes/kernels/) / [CUDA 学习笔记](/notes/kernels/cuda/)\
+相关基础：[CUDA 基础语法](/notes/kernels/cuda/cuda_basic_syntax)
 
 ### 1.Global Memory 访问优化：Coalescing
 GPU全局内存按照128字节（32bytes * 4 扇区）为单位进行事务，当一个warp的32个线程同时访问连续的内存地址时，把32个请求合并

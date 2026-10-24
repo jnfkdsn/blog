@@ -8,8 +8,8 @@ status: draft
 
 # Softmax算子实现与优化
 
-相关路线：[GPU 编程与算子优化知识地图](/notes/gpu-programming) / [LLM 推理系统知识地图](/notes/llm-inference)  
-相关基础：[Reduce 优化实践](/posts/reduce) / [Roofline 分析](/notes/cuda/roofline)
+相关路线：[算子编程与优化](/notes/kernels/) / [模型与推理系统](/notes/inference/)\
+相关基础：[Reduce 优化实践](/posts/reduce) / [Roofline 分析](/notes/kernels/cuda/roofline)
 
 ## 计算公式
 给定一个向量 $\mathbf{x} = [x_0, x_1, ..., x_{N-1}]$，Softmax 将其转换为概率分布：

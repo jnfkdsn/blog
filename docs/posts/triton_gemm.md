@@ -8,8 +8,8 @@ status: draft
 
 # Triton GEMM 优化
 
-相关路线：[GPU 编程与算子优化知识地图](/notes/gpu-programming)  
-相关基础：[Triton 基础](/notes/triton/triton_basic) / [CUDA 矩阵乘法](/posts/GEMM)
+相关路线：[算子编程与优化](/notes/kernels/)\
+相关基础：[Triton 基础](/notes/compile/triton/triton_basic) / [CUDA 矩阵乘法](/posts/GEMM)
 
 ## Naive Triton GEMM
 
@@ -329,4 +329,4 @@ Per-channel scaling（AWQ 等量化方法）:
   每个 output channel 一个 scale → 权重量化的常用方案
 ```
 
-相关基础：[低精度数值与混合精度计算](/notes/cuda/low_precision) / [Tensor Core 编程](/notes/cuda/tensor_core)
+相关基础：[低精度数值与混合精度计算](/notes/kernels/cuda/low_precision) / [Tensor Core 编程](/notes/kernels/cuda/tensor_core)

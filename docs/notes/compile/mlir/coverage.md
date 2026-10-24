@@ -1,4 +1,5 @@
 ---
+excludeFromSidebar: true
 order: 2
 title: 计划覆盖范围与缺口
 updated: 2026-10-04
@@ -70,7 +71,7 @@ CPU数值与部分固定配置计时已经执行；GPU部分完成NVVM/PTX/cubin
 | D15 | math/index/complex：数学函数、近似、整数范围、index 与复数语义 | D03、C06 | [Math/Index 两篇](./dialects/math/)展开 D2：exp 实现、expm1 消去、fast-math 边界、ceildiv/余块、位宽与折叠；真实 libm/LLVM 对照与 64 位数值已验证 | D3—4：目标数学实现、误差与性能取舍；32 位执行按目标环境补充，[Complex](./dialects/math/complex)已有乘法/abs展开和折叠证据 |
 | D16 | gpu/async：launch、线程层次、空间、同步、异步依赖 | D11、D14 | [GPU 三篇](./dialects/gpu/)与 16 实验：真实映射/NVVM/PTX/cubin/Host object 与逻辑依赖模型；设备执行未完成 | D3—4：GPU kernel/host 边界、异步与资源生命周期 |
 | D17 | llvm 与目标方言：类型、指针、DataLayout、NVVM/ROCDL 等 | D11、M05 | [LLVM 三篇](./dialects/llvm/)展开指针、布局、descriptor、index 位宽与 translation；CPU 侧有编译与调用证据；[Host/Device](./compiler/targets/host_device)展开 NVVM 与设备对象/启动协议 | D3：lowering/translation；D4：选定目标的 ABI 与性能 |
-| D18 | 项目方言：StableHLO、Triton、Triton-Ascend/AscendNPU IR | C01—11、M05 | [Triton](/notes/triton/compiler_path)、[Triton-Ascend](/notes/triton/ascend_compiler_path)、[HIVM](/notes/compile/ai-compiler/npu-ir/source_path)固定源码链已有，未构建/执行项目；[StableHLO/TOSA](./dialects/extensions/graph_ir)定位与TOSA→Linalg已有 | D3—4：在目标仓库固定版本，核对实际入口和变换链 |
+| D18 | 项目方言：StableHLO、Triton、Triton-Ascend/AscendNPU IR | C01—11、M05 | [Triton](/notes/compile/triton/compiler_path)、[Triton-Ascend](/notes/compile/triton/ascend_compiler_path)、[HIVM](/notes/compile/npu-ir/source_path)固定源码链已有，未构建/执行项目；[StableHLO/TOSA](./dialects/extensions/graph_ir)定位与TOSA→Linalg已有 | D3—4：在目标仓库固定版本，核对实际入口和变换链 |
 
 ## 编译器构造、变换与 lowering
 
@@ -133,6 +134,6 @@ CPU数值与部分固定配置计时已经执行；GPU部分完成NVVM/PTX/cubin
 
 ## 更新规则
 
-新增/扩写正文时同步更新对应 ID 的位置、展开深度和证据；发现正文只提到术语时标为概述或缺口。章节完成、示例通过、用户阅读、用户掌握分别记录。阶段 A 的最小实验已完成；后续章节不会仅因生成或通过维护脚本就记为学习者已掌握。Pass 章的行为证据单列在 `artifacts/logs/mlir-docs/2026-09-08-passes/manifest.json`，包括输出、调度范围、日志顺序与失败行为。
+新增/扩写正文时同步更新对应 ID 的位置、展开深度和证据；发现正文只提到术语时标为概述或缺口。章节完成、示例通过、用户阅读、用户掌握分别记录。实验的作者验证与学习者的独立完成分别记录，不因通过维护脚本就推断已掌握。Pass 章的行为证据单列在 `artifacts/logs/mlir-docs/2026-09-08-passes/manifest.json`，包括输出、调度范围、日志顺序与失败行为。
 
 范围依据：[官方文档分类](https://mlir.llvm.org/docs/)、[方言目录](https://mlir.llvm.org/docs/Dialects/)、[教程目录](https://mlir.llvm.org/docs/Tutorials/)。API/语义的具体深度按固定版本源码及所选项目需要核对。

@@ -1,5 +1,5 @@
 ---
-order: 0
+order: 10
 title: 传统编译器
 updated: 2026-09-15
 tags: [compiler, ir, ssa, optimization]

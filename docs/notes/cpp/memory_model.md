@@ -102,7 +102,7 @@ int main() {
 
 CPU 原子操作不能自动证明 GPU kernel、DMA 或跨 stream 的顺序。CUDA 扩展包含线程 scope 与设备相关条件，需要按 CUDA 契约选择 API。[NVIDIA CUDA C++ Memory Model](https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/cuda-cpp-memory-model.html)
 
-同样，`cp.async` 完成等待和 block 线程 barrier 处理不同层次的问题，见 [异步流水线](/notes/cuda/async_pipeline)。不要把所有“同步”压缩成一个概念。
+同样，`cp.async` 完成等待和 block 线程 barrier 处理不同层次的问题，见 [异步流水线](/notes/kernels/cuda/async_pipeline)。不要把所有“同步”压缩成一个概念。
 
 ## 自查与练习
 

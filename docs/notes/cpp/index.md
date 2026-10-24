@@ -1,5 +1,5 @@
 ---
-order: 0
+order: 10
 title: C++ 工程基础
 updated: 2026-09-30
 ---
@@ -34,8 +34,8 @@ updated: 2026-09-30
 
 ## 三条应用分支
 
-- **CUDA / CUTLASS：**基础、生命周期、模板 → [CUDA C++ 导读](/notes/cuda/cpp) → [CUDA 基础语法](/notes/cuda/cuda_basic_syntax) → [异步流水线](/notes/cuda/async_pipeline)。关注 host/device 边界、布局和异步资源使用。
-- **推理 runtime：**所有权、STL、构建 → 多线程、内存模型 → [推理系统笔记](/notes/infer/)。关注任务取消、背压、队列关闭和 buffer 复用。
+- **CUDA / CUTLASS：**基础、生命周期、模板 → [CUDA C++ 导读](/notes/kernels/cuda/cpp) → [CUDA 基础语法](/notes/kernels/cuda/cuda_basic_syntax) → [异步流水线](/notes/kernels/cuda/async_pipeline)。关注 host/device 边界、布局和异步资源使用。
+- **推理 runtime：**所有权、STL、构建 → 多线程、内存模型 → [推理系统笔记](/notes/inference/)。关注任务取消、背压、队列关闭和 buffer 复用。
 - **LLVM / MLIR：**类与模板、视图生命周期、编译链接 → [编译器学习笔记](/notes/compile/)。随后学习 LLVM 的 `StringRef`、`ArrayRef`、`SmallVector`、`DenseMap` 和 `isa/cast/dyn_cast`；专用 API 留在编译器目录。
 
 ## 阶段验收
@@ -48,4 +48,8 @@ updated: 2026-09-30
 
 ## 内容边界
 
-这里的“对象与存储”讨论生命周期和布局；“并发内存模型”讨论线程间顺序。CUDA 的 global/shared memory、stream、event 和同步 scope 在 [CUDA 目录](/notes/cuda/) 展开。
+这里的“对象与存储”讨论生命周期和布局；“并发内存模型”讨论线程间顺序。CUDA 的 global/shared memory、stream、event 和同步 scope 在 [CUDA 目录](/notes/kernels/cuda/) 展开。
+
+## 练习参考
+
+[算法练习笔记](./leetcode)单独保留，按需查阅，不插入 C++ 原理课程的阅读顺序。

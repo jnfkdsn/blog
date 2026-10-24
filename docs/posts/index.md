@@ -17,5 +17,5 @@ order: 0
 
 ## 相关地图
 
-- [GPU 编程与算子优化知识地图](/notes/gpu-programming)
-- [LLM 推理系统知识地图](/notes/llm-inference)
+- [算子编程与优化](/notes/kernels/)
+- [模型与推理系统](/notes/inference/)

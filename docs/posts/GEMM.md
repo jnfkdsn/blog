@@ -8,8 +8,8 @@ status: draft
 
 # CUDA 矩阵乘法
 
-相关路线：[GPU 编程与算子优化知识地图](/notes/gpu-programming)  
-相关基础：[Roofline 分析](/notes/cuda/roofline) / [Triton GEMM 优化](/posts/triton_gemm)
+相关路线：[算子编程与优化](/notes/kernels/)\
+相关基础：[Roofline 分析](/notes/kernels/cuda/roofline) / [Triton GEMM 优化](/posts/triton_gemm)
 
 ## Roofline分析
 
@@ -600,4 +600,4 @@ V5 相对 V4:
 
 
 
-相关笔记：[Ampere 异步拷贝与软件流水线](/notes/cuda/async_pipeline) / 后续实践：[Tensor Core GEMM 实践](/posts/tensor_core_gemm)
+相关笔记：[Ampere 异步拷贝与软件流水线](/notes/kernels/cuda/async_pipeline) / 后续实践：[Tensor Core GEMM 实践](/posts/tensor_core_gemm)

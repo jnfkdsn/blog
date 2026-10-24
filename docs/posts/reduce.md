@@ -8,7 +8,7 @@ status: draft
 
 # Reduce 优化实践
 
-相关路线：[GPU 编程与算子优化知识地图](/notes/gpu-programming) / [CUDA 学习笔记](/notes/cuda/)  
+相关路线：[算子编程与优化](/notes/kernels/) / [CUDA 学习笔记](/notes/kernels/cuda/)\
 相关实践：[Softmax 算子实现与优化](/posts/softmax)
 
 ## 问题定义

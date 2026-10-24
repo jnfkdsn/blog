@@ -1,17 +1,16 @@
 ---
-order: 2
+order: 30
 title: MLIR 技术文档
 updated: 2026-10-04
-excludeFromSidebar: true
 tags: [mlir, compiler, learning]
 status: draft
 ---
 
 # MLIR 技术文档
 
-这套文档面向 AI Compiler 的阅读、实现与调试能力：从 IR 的语义与约束出发，逐步进入改写、分析、渐进 lowering、内存与目标后端。知识按所属机制归档；学习顺序由前置依赖决定。整个 workspace 的长期安排仍以 [AI Compiler 学习路线](/notes/compile/ai-compiler/stack_and_roadmap)为准。
+这套文档面向 AI Compiler 的阅读、实现与调试能力：从 IR 的语义与约束出发，逐步进入改写、分析、渐进 lowering、内存与目标后端。知识按所属机制归档；学习顺序由前置依赖决定。与其他领域的关系见[知识库学习路线](/notes/roadmap)，具体系统定位见 [AI 编译器技术全景](/notes/compile/stack)。
 
-**IR 定义之后按[后续阅读顺序](./chapter_plan)逐站推进；阶段标准与进度见[学习路径](./learning_path)，知识范围见[覆盖表](./coverage)，查机制用下方分类。** 覆盖表是计划与缺口清单，不等同于已经写完或已经掌握的目录。
+**IR 定义之后按[后续阅读顺序](./chapter_plan)逐站推进；阶段标准见[学习路径](./learning_path)，知识范围见[覆盖表](./coverage)，查机制用下方分类。** 覆盖表是计划与缺口清单，不等同于已经写完或已经掌握的目录。
 
 ## 分类与职责
 
@@ -54,7 +53,7 @@ status: draft
 
 覆盖表用于检查内容是否遗漏；正文按理解过程组织，不机械地逐项列术语。后续章节以一个持续演进的例子连接现象、原理和实现，关键结论展开推导及中间状态，源码围绕具体论点解释。版本和复现日志集中放在文末或实验目录，减少阅读中断。
 
-“深入”随阶段递进：基础阶段认识并解释小程序；阶段 B 建立 Pass 运行模型、C++ 对象修改与实现测试的基础；当前阶段 C 定义操作并逐步进入接口与转换；再往后追踪分析和优化的正确性与性能。扩展专题不自动成为上一阶段新增的完成门槛。
+“深入”随阶段递进：基础阶段认识并解释小程序；阶段 B 建立 Pass 运行模型、C++ 对象修改与实现测试的基础；阶段 C 定义操作并逐步进入接口与转换；再往后追踪分析和优化的正确性与性能。扩展专题不自动成为上一阶段新增的完成门槛。
 
 模块 `index.md` 负责定位和导航。机制正文承载完整解释；贯通教程承载跨章节推演。正式实践在阅读和讨论之后安排到 workspace 的 `aicompiler-labs/llvm-mlir/`，生成物进入 `artifacts/`。
 
@@ -64,6 +63,6 @@ status: draft
 
 示例按“完整合法模块、预期失败模块、局部片段、概念伪代码”区分。验证方法、复现命令和结果范围见[阅读与验证 IR](./guides/inspecting_ir)。验证通过表示相应检查通过；读者掌握程度另记，不根据文档生成状态推断。
 
-## 从当前阅读进度继续
+## 选择后续阅读
 
-已理解IR定义后，建议从[Conversion](./compiler/conversion/)的操作与最小类型转换进入[编译流程导读](./tutorials/pipelines/overview)，再按Tensor/Linalg→MemRef/Bufferization→CPU执行链推进。之后选择Softmax或Matmul，把分析、优化和目标映射串入同一个任务。正文已生成不改变个人阅读与实践进度。
+已理解IR定义后，建议从[Conversion](./compiler/conversion/)的操作与最小类型转换进入[编译流程导读](./tutorials/pipelines/overview)，再按Tensor/Linalg→MemRef/Bufferization→CPU执行链推进。之后选择Softmax或Matmul，把分析、优化和目标映射串入同一个任务。已有相关基础时，可以直接进入需要的模块。

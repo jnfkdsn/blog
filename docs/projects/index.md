@@ -9,11 +9,11 @@ order: 0
 ## 后续可以沉淀的项目
 
 - CUDA kernels 练习仓库：把 Reduce、Softmax、GEMM、Transpose 整理成统一 benchmark。
-- nano-vLLM 源码阅读与复现：从 [nano-vLLM 源码阅读](/notes/infer/nanovllm) 延伸成完整项目记录。
+- nano-vLLM 源码阅读与复现：从 [nano-vLLM 源码阅读](/notes/inference/nanovllm) 延伸成完整项目记录。
 - Triton kernel 实验：从 [Triton GEMM 优化](/posts/triton_gemm) 延伸到更多算子。
 
 ## 相关入口
 
 - [知识库入口](/notes/)
 - [实践记录](/posts/)
-- [GPU 编程与算子优化知识地图](/notes/gpu-programming)
+- [算子编程与优化](/notes/kernels/)

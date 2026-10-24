@@ -8,7 +8,7 @@ status: draft
 
 # Tensor Core GEMM 实践
 
-相关路线：[GPU 编程与算子优化知识地图](/notes/gpu-programming) / [CUDA 学习笔记](/notes/cuda/) / 前置知识：[低精度数值与混合精度计算](/notes/cuda/low_precision) / [Tensor Core 编程](/notes/cuda/tensor_core) / [Ampere 异步拷贝与软件流水线](/notes/cuda/async_pipeline) / 相关实践：[CUDA 矩阵乘法](/posts/GEMM) / [Triton GEMM 优化](/posts/triton_gemm)
+相关路线：[算子编程与优化](/notes/kernels/) / [CUDA 学习笔记](/notes/kernels/cuda/) / 前置知识：[低精度数值与混合精度计算](/notes/kernels/cuda/low_precision) / [Tensor Core 编程](/notes/kernels/cuda/tensor_core) / [Ampere 异步拷贝与软件流水线](/notes/kernels/cuda/async_pipeline) / 相关实践：[CUDA 矩阵乘法](/posts/GEMM) / [Triton GEMM 优化](/posts/triton_gemm)
 
 ## 实践目标
 

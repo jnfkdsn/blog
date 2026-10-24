@@ -141,7 +141,7 @@ bool has_parent(const Node& node) {
 
 把借用地址提交给线程池或 CUDA kernel 后，当前函数返回不等于任务完成。可以让任务持有 owner，或由调度器维护 in-flight 资源并在完成后释放。GPU 不会因收到裸地址自动增加 CPU 上的 shared_ptr 计数。
 
-CUDA 分配必须匹配 CUDA 释放接口，并考虑 stream 使用顺序，见 [CUDA C++ 导读](/notes/cuda/cpp)。RAII 能管理清理入口，但正确的释放时机仍由异步协议决定。
+CUDA 分配必须匹配 CUDA 释放接口，并考虑 stream 使用顺序，见 [CUDA C++ 导读](/notes/kernels/cuda/cpp)。RAII 能管理清理入口，但正确的释放时机仍由异步协议决定。
 
 ## 自查与练习
 
