@@ -1,7 +1,7 @@
 ---
 order: 7
 title: 编译产物、Relax VM 与内存生命周期
-updated: 2026-10-17
+updated: 2026-10-28
 ---
 
 # 编译产物、Relax VM 与内存生命周期
@@ -21,6 +21,20 @@ result = R.call_tir(Module.fused_matmul_add_relu,
 ```
 
 底层PrimFunc却接收四个buffer：三个输入和一个输出。连接它们时，需要为result准备存储，并把它作为最后一个参数交给数值函数。
+
+跟踪 result 这个值，转换前后可用下列伪代码对照：
+
+```text
+转换前：
+    result = call_tir(fused, x, weight, bias)
+
+落实调用协议后：
+    result = 准备形状为[2,2]的输出Tensor
+    fused(x的数据, weight的数据, bias的数据, result的数据)
+    后续计算使用 result
+```
+
+调用方准备结果位置，数值函数只负责填入。代码生成不能仅把名字替换成 fused，却漏掉第四个输出参数；否则调用双方的协议就没有接起来。
 
 这类转换将“返回一个张量值”落实为“在已有输出buffer中写入”。模型调用者仍然获得一个结果Tensor，低层实现则采用适合生成代码的参数协议。
 
@@ -42,7 +56,17 @@ return output
 
 这里区分了原始storage对象和拥有形状、dtype等信息的tensor对象。tensor引用相应存储，并通过偏移定位其数据。
 
-为什么函数调用前已经出现 `kill_object(storage)`？它释放的是当前程序对这个storage对象的一项引用。output仍然持有所需存储，因此不能将它理解为“提前释放了输出数据”。对象引用生命周期与底层内存真正可回收的时刻需要分开看。
+可以按对象关系追踪这个过程，而不只看操作名称：
+
+| 阶段 | 当前程序能够通过什么对象访问结果空间 |
+|---|---|
+| alloc_storage 后 | storage 代表取得的存储 |
+| alloc_tensor 后 | output 具有形状、类型并持有所需存储；storage 局部引用仍存在 |
+| kill_object(storage) 后 | 不再需要 storage 这个局部引用，output 仍保持数据有效 |
+| 数值函数调用后 | output 中已经写入结果 |
+| 返回 output 后 | 调用方持有返回 Tensor，数据继续可用 |
+
+这里的 kill 释放当前程序的一项对象引用，而不是在 output 还要使用时强制释放底层字节。返回对象、别名对象还持有什么，决定存储何时才能真正回收。表格表达逻辑拥有关系，不要求记忆底层引用计数的具体数值。
 
 本例低层融合函数内部还有自己的临时buffer。图层的输出分配与TensorIR函数内部的局部存储属于不同层次，不能只统计这一条16字节分配就声称整个计算只使用16字节工作内存。
 
@@ -50,7 +74,9 @@ return output
 
 若某些张量的大小与生命周期可以在编译时确定，内存规划有机会让不同时存活的张量复用存储。判断复用时，需要考虑最后使用位置、别名、对齐、设备和大小等条件。
 
-例如张量A的所有消费者已经完成，后面才开始产生B，且存储条件兼容，就可能复用同一块区域。若A仍要被返回或被另一分支读取，则不能提前覆盖。
+例如 A 有四个 float32 元素，最后一次读取发生在步骤2；B 也需要16字节，从步骤3才开始写入。如果设备、对齐和别名等条件兼容，二者的存活区间不重叠，可以考虑同一块空间。
+
+若步骤4还要读取 A，步骤3写入 B 就会破坏 A 的旧值。只看“A、B大小相同”不能决定复用，必须把最后使用位置连接到写入时机。返回 A 也是一种需要继续保留它的使用，不能因本函数内部没有后续读就判定它已经失效。
 
 动态batch也可以保留静态关系：输出始终为 `[B,2]`、float32，所需元素字节数可写成 `8B`。但B的具体数值在运行时取得，最终是否复用以及如何分配，要看对应规划和运行时策略。
 
@@ -72,6 +98,8 @@ return output
 ```
 
 省略号代表具体检查参数和常量索引，完整输出由实验保存。它展示的是模型级操作：检查三个输入、准备输出、调用数值函数、返回tensor。
+
+把这一段实际指令代入主例：%0、%1、%2 是输入；%3 暂存 storage；%4 是输出 Tensor。创建 %4 后，%3 可以清空；调用 fused 时仍把 %4 传进去，最后 ret 返回 %4。这解释了为什么清空 storage 局部槽位不会让结果失效。
 
 矩阵乘法中的乘加循环没有逐条出现在VM字节码里，而是由LLVM路径编译成数值函数。VM调用该函数完成计算。
 
@@ -104,9 +132,8 @@ y = vm["main"](x_nd, weight_nd, bias_nd)
 
 ## 7. 推演与实践入口
 
-1. 为什么 `call_tir` 只有三个显式输入，最终数值函数却收到四个buffer？
-2. output仍在使用数据时，释放storage变量的一项引用为什么可能合法？
-3. 动态B下，哪些分配关系可以编译时表达，哪些数值必须运行时取得？
-4. 加载`.so`成功后，哪些外部函数和环境条件仍可能缺失？
+1. call_tir 在模型层返回 Tensor，而 PrimFunc 接收输出 buffer，谁把两种协议接起来？
+2. alloc_tensor 之后清空 storage 的局部引用，为什么 output 仍可被数值函数写入和返回？
+3. A 在步骤4仍被读取，B 在步骤3开始写入，大小相同是否足以让二者复用存储？
 
 实验见 [TVM labs 的 runtime](https://github.com/jnfkdsn/aicompiler/tree/main/tvm-e2e)。固定源码入口为 [CallTIRRewrite](https://github.com/apache/tvm/blob/v0.20.0/src/relax/transform/call_tir_rewrite.cc)、[StaticPlanBlockMemory](https://github.com/apache/tvm/blob/v0.20.0/src/relax/transform/static_plan_block_memory.cc)、[VM构建](https://github.com/apache/tvm/blob/v0.20.0/python/tvm/relax/vm_build.py) 和 [VM runtime](https://github.com/apache/tvm/blob/v0.20.0/src/runtime/relax_vm/vm.cc)。
