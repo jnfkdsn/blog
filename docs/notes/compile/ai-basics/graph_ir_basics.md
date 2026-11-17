@@ -1,147 +1,90 @@
 ---
 order: 2
 title: Graph IR 基础
-updated: 2026-07-05
+updated: 2026-10-30
 tags: [ai-compiler, graph-ir, ir]
 status: draft
 ---
 
 # Graph IR 基础
 
-相关入口：[AI Compiler 基础](/notes/compile/ai-basics/)
+相关入口：[AI Compiler 基础](./)
 
-Graph IR 用节点和边表示 tensor program。节点通常是 op，边通常是 tensor value 的定义和使用关系。
+编译器要把一段计算交给后续优化，首先需要回答：每一步产生什么，谁会使用这个结果，哪些行为必须保留？Graph IR 用操作和数据依赖表达这些关系。
 
-## 基本结构
-
-```text
-Graph
-  inputs
-  nodes
-  outputs
-
-Node
-  op_type
-  inputs
-  outputs
-  attrs
-  metadata
-
-Value
-  producer
-  users
-  metadata
-```
-
-例子：
+本章使用一个纯张量程序作为示意。`x` 为 `[2, 3]`，`b` 为 `[3]`，Add 按列广播，Relu 逐元素执行：
 
 ```text
-x, w, b
-  -> MatMul(x, w) -> t0
-  -> Add(t0, b)   -> t1
-  -> Relu(t1)     -> y
+t = Add(x, b)
+y = Relu(t)
+return t, y
 ```
 
-Graph IR 需要表达：
+这次刻意返回两个结果，用来观察“中间结果”怎样影响改写。
 
-- op 类型。
-- tensor value 的 producer。
-- tensor value 的 users。
-- op attrs，例如 transpose、axis、epsilon。
-- tensor metadata，例如 shape、dtype、layout。
-- side effect，例如 in-place、random、IO、sync。
+## 1. 操作、值与使用关系
 
-## Graph IR 和传统 IR 的差异
-
-传统三地址 IR 更像标量指令序列：
+Add 是一个操作，`t` 是它产生的值，Relu 对 `t` 的读取是一次使用。返回 `t` 也是使用，因此不能只统计算子之间的连线。
 
 ```text
-%0 = add %a, %b
-%1 = mul %0, %c
+x ─┐
+   Add ── t ── Relu ── y ── 返回第二项
+b ─┘      └─────────────── 返回第一项
 ```
 
-Graph IR 更像 tensor op DAG：
+可以把编译器需要记录的关系简化为：
+
+| 值 | 定义来源 | 使用位置 |
+|---|---|---|
+| x、b | 程序输入 | Add |
+| t | Add 的结果 | Relu 的输入、返回第一项 |
+| y | Relu 的结果 | 返回第二项 |
+
+这就是定义与使用关系（use-def）。它让编译器能够从结果找到生产者，也能从生产者找到受一次改写影响的使用位置。真实 IR 不一定按这张表组织内存，但需要表达相应的信息。
+
+## 2. 计算结果与物理存储
+
+`t` 和 `y` 表示两个计算结果，不等于已经确定要分配两个缓冲区。物理存储通常在后续实现中安排。
+
+不过，存储决定必须满足结果语义。取一个位置，令 `x[i,j] + b[j] = -3`，那么返回的 `t[i,j]` 应为 `-3`，`y[i,j]` 应为 `0`。如果直接在 `t` 的存储上覆盖 Relu 结果，再把同一片内容作为两个输出返回，调用方会看到两个零，程序就变了。
+
+如果程序只返回 `y`，并且 `t` 没有其他可观察用途，后端可能复用存储，甚至让每个中间元素只短暂存在于计算过程中。判断依据是使用关系和存储契约，而不是“SSA 名称不同，所以必须分配不同内存”。
+
+## 3. 操作契约与附加信息
+
+仅知道操作名是 Add 还不够。编译器需要知道它支持哪些输入、怎样广播、如何确定输出类型、是否修改输入。这样的约定通常称为操作的 schema 或语义契约。
+
+例如 ReduceSum 还需要指定归约维度，以及是否保留长度为一的维度。这些设置常用属性表达；输入张量则用操作数表达。shape、dtype 等推导结果可能放在类型、值的信息或分析结果中，并非每个系统都有同一种 metadata 字段。
+
+因此匹配操作名只是入口。要把两种写法互换，还需要确认它们的参数、类型与语义是否一致。[下一篇](./metadata_inference)将解释怎样从这些约定推导具体信息。
+
+## 4. 可观察行为与依赖
+
+前面的 Add 和 Relu 采用纯值语义：操作产生结果，不修改外部可见的存储。考虑另一个包含可变存储的示意：
 
 ```text
-t0 = MatMul(A, B)
-t1 = Add(t0, bias)
-y  = Relu(t1)
+p = Read(buffer, 0)
+Write(buffer, 0, 9)
+q = Read(buffer, 0)
 ```
 
-差异：
+两次 Read 的显式地址相同，但它们观察的存储状态不同，不能直接把 `q` 替换成 `p`。编译器需要表示或分析读写效果、先后关系，以及不同引用是否可能指向同一存储。
 
-- value 通常是 tensor，不是标量寄存器。
-- op 粒度更大。
-- shape/dtype/layout 是一等信息。
-- control flow 可能被弱化或独立表示。
-- side effect 和 alias 主要围绕 tensor buffer。
+随机数也要看契约：隐式更新全局随机状态的操作具有状态依赖；把种子或状态显式作为输入输出的表示可以暴露这条依赖。不能只根据操作名称决定是否可删除或合并。
 
-## Use-Def
+控制流同样可以进入图表示，例如分支、循环和嵌套区域。简单的张量计算常画成 DAG，但不能据此认为所有 Graph IR 都没有控制流。
 
-use-def 是 graph rewrite 的基础。
+## 5. 图改写与结构校验
 
-```text
-def: 哪个 node 产生了这个 value
-use: 哪些 node 使用了这个 value
-```
+假设优化器用一个新实现产生等价的 `y_new`，替换原来的 `y`。它至少要把“返回第二项”改为引用 `y_new`，再判断旧 Relu 能否删除。Add 仍然不能删，因为返回第一项还使用 `t`。
 
-融合、DCE、CSE 都需要 use-def：
+Verifier 检查的是当前 IR 规定的不变量，例如引用是否有效、操作参数是否符合契约、使用是否处于合法作用域。允许未知 shape 的 IR 不能因为 shape 尚未完全推导就一概判错；具体检查取决于该阶段的规则。
 
-- Fusion：找 producer-consumer。
-- DCE：删除没有 users 且不是 graph output 的 node。
-- CSE：把等价 node 的 users 重定向到已有 value。
-- Layout rewrite：替换 transform op 的 uses。
+结构合法也不保证优化正确。把返回的 `t` 错接成 `y`，可能仍然满足类型和引用规则，却改变了负数位置的结果。结构校验、语义论证和执行测试各自解决不同问题。
 
-## Op Schema
+## 自查
 
-Op schema 描述 op 的合法输入输出。
+1. 本例中 Relu 被另一个等价实现替代后，为什么不能顺便删除 Add？
+2. 两次 Read 读取相同地址，合并前还需要确认什么事实？
 
-```text
-Add:
-  inputs: Tensor, Tensor
-  attrs: broadcast rule
-  output: Tensor
-
-ReduceSum:
-  inputs: Tensor
-  attrs: axis, keepdim
-  output: Tensor
-```
-
-schema 用途：
-
-- 校验 graph。
-- 做 shape/dtype inference。
-- 判断 decomposition。
-- 判断 fusion legality。
-- 指导 lowering。
-
-没有 schema 的 graph rewrite 很容易变成字符串匹配，后续维护困难。
-
-## Side Effect
-
-大多数 tensor op 是 pure：相同输入得到相同输出，不修改外部状态。
-
-非 pure op：
-
-- in-place update。
-- random。
-- IO。
-- state update。
-- device synchronization。
-
-Graph rewrite 不能随意重排 side-effect op。融合 pass 如果跨越 side-effect op，需要证明重排不改变语义；多数情况下直接禁止。
-
-## Graph Verifier
-
-Graph IR 需要 verifier 检查基本不变量：
-
-- 所有 input value 有定义。
-- 所有 graph output 有定义。
-- producer 在 consumer 前，或 graph 允许无序并单独拓扑排序。
-- op 输入数量和 dtype/shape 满足 schema。
-- metadata 不缺失。
-- side-effect op 顺序被表示。
-- graph 没有悬空 use。
-
-Verifier 是 graph rewrite pass 的安全网。
+下一篇：[Metadata Inference 基础](./metadata_inference)。已有传统 IR 基础时，可以把本章理解为将定义、使用和效果关系扩展到张量程序，而不是另一套完全无关的概念。

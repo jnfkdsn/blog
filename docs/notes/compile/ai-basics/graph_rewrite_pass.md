@@ -1,120 +1,112 @@
 ---
 order: 4
 title: Graph Rewrite 与 Pass 基础
-updated: 2026-07-05
+updated: 2026-10-30
 tags: [ai-compiler, graph-rewrite, pass]
 status: draft
 ---
 
 # Graph Rewrite 与 Pass 基础
 
-相关入口：[AI Compiler 基础](/notes/compile/ai-basics/)
+相关入口：[AI Compiler 基础](./)
 
-Graph rewrite pass 对 graph IR 做语义保持变换。算子融合是 graph rewrite 的一种，但在 fusion 之前通常还有 decomposition、canonicalization、constant folding、DCE、CSE 等 pass。
+知道图的结构和各个值的信息后，编译器就可以尝试改写程序。一次改写要完成三件相连的工作：找到候选，证明修改被允许，再正确维护修改后的图。优化类 Pass 在此基础上还要判断收益；也有 Pass 负责规范化或满足后续转换要求。
 
-## Pass 的基本结构
-
-```text
-input graph
-  -> analyze
-  -> match pattern
-  -> check legality
-  -> rewrite graph
-  -> update metadata
-  -> verify graph
-```
-
-Pass 的输出仍然是 graph IR，只是结构更适合后续优化或 lowering。
-
-## 常见 Graph Rewrite
-
-Decomposition：
+本章用一个可手算的纯整数张量程序贯穿这些工作。所有值为同形状 i32 张量，Add 逐元素执行；例子没有溢出，也没有可观察的存储别名。代码为示意 IR：
 
 ```text
-HighLevelOp -> smaller primitive ops
+k = Add(Const([1, 2]), Const([3, 4]))
+a = Add(x, k)
+b = Add(x, k)
+return a, b
 ```
 
-Canonicalization：
+## 1. 常量折叠与已知输入
+
+第一个 Add 的两个输入在编译时已经确定，因此可以得到 `[4,6]`。编译器将 `k` 的使用位置改为引用这个常量：
 
 ```text
-统一等价写法，减少 pattern 数量
+k = Const([4, 6])
+a = Add(x, k)
+b = Add(x, k)
+return a, b
 ```
 
-Constant folding：
+这就是常量折叠。决定成立的依据是操作可在编译时求值、输入已知，并且求值遵循目标操作语义。
+
+如果 `[3,4]` 只是本次执行传入的参数值，编译器不能把它永久写进产物，除非编译契约明确绑定了该常量，或生成了保护该假设的特化检查。否则下一次传入不同值时就会出错。
+
+## 2. 公共子表达式与使用替换
+
+剩下两个 Add 的操作、输入和类型相同。在本例的纯值语义下，它们产生相同结果，可以保留一次计算：
 
 ```text
-常量输入的子图直接计算
+k = Const([4, 6])
+a = Add(x, k)
+return a, a
 ```
 
-DCE：
+具体修改先把原来使用 `b` 的返回位置改成使用 `a`，随后删除已经无用的第二个 Add。这就是公共子表达式消除（CSE）的基本过程。若修改顺序不当，先删定义却没有修复使用，图中就会留下无效引用。
+
+这里约定输出是数学张量值。如果上层 API 还要求两个返回对象拥有独立可变存储，后续存储实现就必须保留这种可观察行为；“值相同”本身不能证明调用后的修改行为也相同。
+
+同理，读同一地址的两条 load 是否能合并，还取决于中间是否有相关写入。图形相似只是匹配候选，操作语义、类型、属性和状态依赖才提供合法性依据。
+
+## 3. Pass 组织与分析维护
+
+将上述动作放进程序处理过程，可以得到：
 
 ```text
-删除无 user 且无 side effect 的 op
+读取当前 IR 和必要分析
+  → 找到候选
+  → 检查语义与类型等前提
+  → 创建替代结果，修复使用关系
+  → 删除可安全删除的旧操作
+  → 更新或使相关分析失效
+  → 检查 IR 不变量
 ```
 
-CSE：
+不要求每个 Pass 都机械执行所有步骤。例如纯分析 Pass 不改 IR，某些校验由 Pass 管理器统一组织；但修改者必须遵守分析和 IR 的有效性约定。
 
-```text
-合并等价 op，重定向 users
-```
+常量折叠也可能为后续规则创造机会，因此编译流水线会安排规则顺序，必要时重复应用。是否迭代、何时停止，由具体驱动与算法决定。不能把所有优化都理解成固定运行一次的规则列表。
 
-Fusion：
+## 4. 合法性与收益
 
-```text
-合并 producer-consumer 子图
-```
+前面的改写减少了重复计算。另一些改写即使合法，也需要评估代价。例如两个逐元素操作融合后，可能省去中间张量和一次启动；但如果融合使一个原本可调用高性能库的计算变成较差的自生成实现，总耗时反而可能增加。
 
-## Pattern Matching
+因此需要分别回答：
 
-Pattern 描述想匹配的 graph 形状。
+- **是否合法**：依赖、数值、状态和输出行为是否保持？
+- **是否可实现**：后端能否处理生成的操作及类型、布局组合？
+- **是否值得**：减少的开销能否抵消新增计算、存储压力或实现退化？
 
-```text
-MatMul -> Add -> Relu
-Add -> Relu
-Transpose -> Op -> Transpose
-```
+后两项可能由不同阶段处理，也可能通过后端信息影响较高层的决定。一个图节点更少的程序，并不自动是一份更快的程序。
 
-Pattern matching 只回答“形状像不像”，不回答“能不能改”。能不能改要靠 legality。
+## 5. 其他常见变换的用途
 
-## Rewrite
+上述主例展示了常量折叠和 CSE。其他变换可以按它们改变的对象理解：
 
-Rewrite 是修改 graph：
+| 变换 | 解决的问题 | 需要注意的前提 |
+|---|---|---|
+| Decomposition | 将一个较复杂操作表示为后端可处理的基础计算 | 分解后仍符合原操作的数值与边界语义 |
+| Canonicalization | 将多种写法整理为便于后续识别的形式 | 不能仅凭实数代数恒等式改写严格浮点计算 |
+| DCE | 删除结果无人使用且可以安全删除的操作 | 返回也是使用；效果及操作契约可能要求保留 |
+| Layout rewrite | 消除转换或改变数据访问方式 | 后续操作支持新布局，别名和输出约定保持 |
+| Fusion | 合并计算区域或执行过程 | 分组后的 IR 还需后续实现才能减少实际访存 |
 
-- 创建新 node。
-- 创建新 output value。
-- 把旧 value 的 users 指向新 value。
-- 删除 dead node。
-- 更新 graph output。
-- 更新 metadata。
+它们可以在多个 IR 层次出现，不是只服务于算子融合的一组准备步骤。
 
-核心风险：
+## 6. 改写验证
 
-- use-def 断裂。
-- graph output 指向已删除 value。
-- side-effect 顺序被破坏。
-- metadata 丢失。
+对主例，结构检查可以确认常量子图被折叠、只剩一个运行时 Add。令 `x=[10,20]`，语义推演给出前后两项返回值均为 `[14,26]`。这两种检查分别确认结构变化和一个输入上的结果。
 
-## Analysis Invalidation
+还需要不应改写的情况：把第二个 Add 的输入换成另一个值，它就不能继续按同一公共子表达式合并；把常量改为未绑定的运行参数，就不能提前求值。
 
-Pass 改写 graph 后，一些 analysis 结果会失效。
+Verifier 能发现引用、类型等不变量错误，但不会自动证明前后程序等价。真正的正确性依据来自规则的语义条件，测试用于检验实现是否遵守这些条件。
 
-可能失效：
+## 自查
 
-- shape/layout metadata。
-- liveness / use count。
-- alias 信息。
-- topological order。
-- cost model cache。
+1. 常量折叠后，为什么 `Add(x, k)` 仍然需要在运行时执行？
+2. 两条操作名称、类型都一样，为什么不足以判定可以 CSE？
 
-Pass manager 要知道哪些结果需要重新计算。简单实现可以在每次 rewrite 后重新 run verifier 和 metadata inference；大型系统会做更细粒度的 invalidation。
-
-## Pass 测试
-
-Graph rewrite pass 测试通常包含：
-
-- graph 结构测试：某些 op 是否出现或消失。
-- metadata 测试：shape/dtype/layout 是否保持。
-- 数值测试：rewrite 前后输出是否一致。
-- negative case：不应该 rewrite 的图是否保持不变。
-
-对 fusion pass，negative case 很重要，因为很多 bug 来自“融合了不该融合的子图”。
+下一篇：[Lowering 与 Runtime 基础](./lowering_runtime)。规则与驱动的工程实现见 [MLIR 变换模块](../mlir/compiler/transforms/)，具体图改写任务见 [TVM 调查与修改](../tvm/08_investigation)。

@@ -1,110 +1,111 @@
 ---
 order: 1
 title: AI Compiler Pipeline
-updated: 2026-07-05
+updated: 2026-10-30
 tags: [ai-compiler, pipeline]
 status: draft
 ---
 
 # AI Compiler Pipeline
 
-相关入口：[AI Compiler 基础](/notes/compile/ai-basics/)
+相关入口：[AI Compiler 基础](./)
 
-AI Compiler 的目标是把 tensor program 变成更适合目标硬件执行的 graph、kernel 或 library 调用。它处理的不是传统源码字符串，而是模型、Python 函数、框架 graph 或标准化 IR。
-
-## 总体链路
+考虑一个给每列加偏置、再做激活的计算：
 
 ```text
-model / function / graph
-  -> capture / import
-  -> graph IR
-  -> metadata inference
-  -> graph rewrite
-  -> fusion
-  -> tensor IR / schedule
-  -> target lowering
-  -> codegen / library call
-  -> runtime execution
+x: float32[2, 3]
+b: float32[3]
+y = Relu(Add(x, b))
 ```
 
-每一层的输入输出：
+这里的 Add 按列广播 `b`，Relu 把负数变成零。为了专注编译过程，本例只讨论有限浮点输入、纯张量值语义，输出只包含 `y`。这段代码是计算示意，不属于某个框架的 API。
 
-| 阶段 | 输入 | 输出 | 核心问题 |
-|---|---|---|---|
-| Capture / Import | Python、framework graph、ONNX/HLO | graph IR | 如何稳定表示原程序 |
-| Metadata Inference | graph IR | 带 shape/dtype/layout 的 graph | 每个 tensor 是什么 |
-| Graph Rewrite | graph IR + metadata | 改写后的 graph | 语义保持变换 |
-| Fusion | producer-consumer 子图 | fused op/region | 减少 memory 和 launch |
-| Tensor IR / Schedule | graph op 或 fused region | loop/buffer/schedule | 如何组织计算 |
-| Lowering | tensor IR / high-level op | target IR / kernel / library call | 如何映射到硬件 |
-| Runtime | compiled artifact | 执行结果 | memory、cache、stream、guard |
+知道公式以后，人可以直接写出循环。编译器也要完成这个过程，但它还要判断哪些实现合法、哪些更适合目标，以及结果怎样供调用方使用。这些工作组成了编译流水线。
 
-## Capture / Import
+## 1. 从程序入口到计算表示
 
-不同系统入口不同：
-
-- PyTorch 2.x：从 Python frame / bytecode 捕获 FX Graph。
-- ONNX Runtime：导入 ONNX graph。
-- XLA：接收 HLO/StableHLO。
-- TVM：Relay / Relax / TensorIR。
-- MLIR 系统：导入或构造某个 dialect。
-
-这一阶段的关键产物是 graph：计算从动态图或框架表示变成编译器可分析、可改写的 IR。
-
-## Graph 级优化
-
-Graph 层保留 op 语义，适合做：
-
-- decomposition：把复杂 op 拆成更基础的 op。
-- canonicalization：把等价写法归一。
-- constant folding：计算常量子图。
-- DCE：删除无用 op。
-- CSE：合并重复计算。
-- layout rewrite：调整或消除 layout transform。
-- fusion：合并 producer-consumer 子图。
-
-Graph 层优化的优势是语义信息还在，知道一个 op 是 `MatMul`、`Softmax`、`LayerNorm`。下沉到 loop 或 kernel 后，这些高层语义可能会丢失。
-
-## Tensor IR / Schedule
-
-Tensor IR 描述的是 op 内部的循环、buffer 和访问模式。
+假设上层程序通过函数调用表达 Add 和 Relu。编译器首先需要一份可以分析的表示：
 
 ```text
-for i in M:
-  for j in N:
-    C[i, j] = A[i, j] + B[i, j]
+输入：x, b
+  t = Add(x, b)
+  y = Relu(t)
+输出：y
 ```
 
-这一层适合处理：
+这一步保留下来的重点是计算与依赖：Relu 读取 Add 的结果。图中暂时没有规定 `t` 必须对应一次内存分配，也没有规定两条操作必须启动两个 kernel。
 
-- tiling。
-- vectorization。
-- memory scope。
-- parallel axis。
-- reduction schedule。
-- buffer reuse。
+入口会影响如何得到这份表示：已有模型图可以被导入；宿主语言中的函数可能需要捕获；也可以通过 API 直接构造 IR。捕获计算还需要处理原程序中无法纳入当前图的行为，因此“得到一张图”未必意味着整个宿主程序都进入了图。
 
-NPU IR 融合如果要影响后端性能，最终会连接到 tensor IR / schedule：融合后的子图是否能被表示成合理 loop 和 buffer 计划。
+不同编译器也不一定从图开始。直接面向一个算子的编译器，可能已经拿到了循环或张量块程序。下面的阶段描述共同问题，不是要求所有系统依次经过相同的 IR。
 
-## Lowering 和 Runtime
+## 2. 从依赖关系到已知事实
 
-Lowering 把 graph/tensor IR 映射到硬件：
+图告诉编译器 Add 的输入是谁，但生成程序还需要知道它如何访问元素。本例的输入信息允许推导：
 
 ```text
-graph op / fused region
-  -> tensor loop / schedule
-  -> target kernel or library call
-  -> runtime launch
+t.shape = [2, 3]
+y.shape = [2, 3]
+t[i, j] = x[i, j] + b[j]
 ```
 
-Runtime 负责：
+`b[j]` 说明两行共享同一组偏置，广播不要求先复制出一个 `[2, 3]` 的偏置数组。输出类型也要依据操作的类型规则确认。
 
-- memory planning。
-- workspace 分配。
-- compiled artifact cache。
-- shape guard。
-- stream/event。
-- kernel launch。
-- fallback。
+这类信息推导把操作语义变成后续可使用的事实。若行数未知，编译器仍可能保留符号行数，生成运行时循环；若一项优化必须知道固定行数，就需要额外证明或执行时检查。
 
-AI Compiler 的性能不只来自 codegen。过多 kernel launch、过细 cache key、workspace 反复分配、同步过多，都可能吞掉 graph 优化收益。
+## 3. 从计算关系到实现候选
+
+一种直接实现先计算完整的 `t`，再读取它得到 `y`：
+
+```text
+循环一：t[i, j] = x[i, j] + b[j]
+循环二：y[i, j] = Relu(t[i, j])
+```
+
+另一种实现把同一位置的两步计算放在一起：
+
+```text
+for i in 0..2:
+  for j in 0..3:
+    v = x[i, j] + b[j]
+    y[i, j] = Relu(v)
+```
+
+第二种实现不需要独立的完整张量 `t`，因为本例没有其他地方观察它。这给出了融合的一个收益来源：避免把中间张量写出后再读回。
+
+如果程序还返回 `t`，第二种实现就必须保留该输出；仍然可能在同一循环内计算两份输出，但不能声称已经消除了 `t` 的存储。可见优化决定依赖原程序要求，而不只取决于图中两个节点是否相邻。
+
+融合也只是候选之一。常量子图可以提前计算，重复的纯计算可以合并，布局转换可以被消除或吸收到访问方式中。它们分别改变计算、依赖或存储访问，目的都是得到适合后续实现的程序。
+
+## 4. 从循环到目标实现
+
+即使已经得到一个循环，也还没有决定每次处理几个元素、哪些工作并行执行、尾部元素怎样处理，以及数据放在哪里。调度与后端转换逐步落实这些决定。
+
+例如，连续访问的一段逐元素计算可能被组织成向量操作；矩阵乘法也可能直接交给已有库实现。调用库时，编译器仍要准备参数、输出和必要的布局转换，但不一定自行生成库内部的循环。
+
+所以可以把整体关系概括为：
+
+```text
+表示计算与依赖
+  → 推导信息、检查约束、改写程序
+  → 选择库实现，或生成并优化计算程序
+  → 生成可调用产物及调用组织
+  → 运行时传入数据并执行
+```
+
+信息推导与改写通常会反复交替；一次变换改变了结构，后续就可能需要重新分析。这个过程也不要求每一步都对应单独一个 Pass。
+
+## 5. 从编译产物到执行
+
+编译时生成的是接受 `x`、`b` 的程序，运行时才把本次数据交给它。只要新的输入满足产物依赖的条件，同一份代码就可以用于不同数值。
+
+调用还需要可用的输出存储、正确的参数约定，以及必要的装载或设备启动。编译器可能生成一部分调用代码，其余由框架、运行库或驱动完成。具体边界在各系统中不同。
+
+到这里，原来的张量表达式已经连接到实际执行：图保留计算关系，分析提供决策依据，变换选择程序形态，后端落实实现，运行时组织一次调用。后面各篇将分别展开这些连接中的一个问题。
+
+## 自查
+
+1. 本例将 `x` 换成相同 shape 和 dtype 的另一组数值，为什么通常可以复用编译产物？还可能需要满足哪些条件？
+2. 如果同时返回 `t` 和 `y`，是否还能融合循环？与只返回 `y` 时相比，哪项收益不再成立？
+
+下一篇：[Graph IR 基础](./graph_ir_basics)。具体系统的完整链路见 [TVM 总览](../tvm/01_execution)与 [PyTorch Compiler 总览](../pytorch-compiler/01_execution)。

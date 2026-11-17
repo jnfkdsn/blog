@@ -1,150 +1,92 @@
 ---
 order: 5
 title: Lowering 与 Runtime 基础
-updated: 2026-07-05
+updated: 2026-10-30
 tags: [ai-compiler, lowering, runtime]
 status: draft
 ---
 
 # Lowering 与 Runtime 基础
 
-相关入口：[AI Compiler 基础](/notes/compile/ai-basics/)
+相关入口：[AI Compiler 基础](./)
 
-Lowering 把 graph/tensor IR 下沉到目标后端。Runtime 负责执行编译产物。Graph 层优化如果不能被 lowering 和 runtime 接住，就不能变成真实性能收益。
+经过图优化后，程序仍可能写成 `y = Relu(Add(x, b))`。这已经足够描述结果，却还不能告诉处理器怎样执行。本章沿同一个计算说明：怎样落实实现、怎样安排存储，以及生成的程序如何接收本次输入。
 
-## Lowering 层次
+例子采用有限 float32 输入，`x` 为 `[2,3]`、`b` 为 `[3]`，Add 按列广播，只有 `y` 是程序输出。以下代码均为机制示意。
 
-```text
-Graph IR
-  -> Tensor IR / Loop IR
-  -> Target IR
-  -> kernel source / binary / library call
-```
+## 1. 从操作到访问与计算
 
-Graph IR：
+一种实现把逐元素加法和激活放进同一个循环：
 
 ```text
-y = Relu(Add(x, b))
+for i in range(2):
+  for j in range(3):
+    v = x[i, j] + b[j]
+    y[i, j] = Relu(v)
 ```
 
-Tensor/Loop IR：
+高层 Add 表达整张张量的计算，这段循环则明确了一次迭代处理哪个元素。若 `x` 和 `y` 采用连续行布局，还可以把位置转换成元素偏移：
 
 ```text
-for i in range(numel):
-  y[i] = max(x[i] + b[i], 0)
+x[i, j] → x_base[3*i + j]
+y[i, j] → y_base[3*i + j]
+b[j]    → b_base[j]
 ```
 
-Target lowering：
+后续再将读取、加法、激活与写入落实为目标支持的指令或调用。这样的逐步转换就是 lowering：把抽象操作实现为下层能够执行的表示，同时保留规定的行为。
+
+目标不同，程序形态也不同。CPU 可能使用向量循环，GPU 可能将元素分配给线程执行，NPU 则可能需要显式安排某些搬运与计算。这些都是实现分支，通用概念不规定某种硬件必须出现哪些内存层次。
+
+## 2. 生成代码与选择库实现
+
+并非每个操作都要由编译器从头展开为指令。对于矩阵乘法，编译器可以选择已有库函数，把输入地址、尺寸、布局等参数传给它；对于一个逐元素计算链，也可能生成专门的计算代码。
+
+选择取决于目标、数据规模、布局和候选实现。例如“矩阵乘法后加偏置”可能有三种实现：单独调用矩阵乘法库再执行加法，调用支持该后处理的库入口，或生成包含两者的程序。
+
+不能只按调用次数选择。一次调用的实现如果计算效率较低，可能输给两次调用的方案。后端实现选择把高层优化与硬件代价连接起来，具体决策可以使用规则、代价模型或测量。
+
+## 3. 中间值与存储计划
+
+主例的 `v` 只供同一次迭代使用，因此不必保存为完整的 `[2,3]` 中间张量。它最终位于寄存器还是发生临时存储，还取决于后端实现，不能单凭图中没有中间张量就断言所有访存都消失了。
+
+另一种优化是复用已有缓冲区。假设程序先产生临时值 `a`，其所有读取完成后，再产生一个大小和对齐兼容的临时值 `c`。如果没有其他别名或并发访问，二者可以先后使用同一片存储，降低峰值内存。
+
+这里的关键是实际生命周期不重叠。异步执行时，主机已经提交完一次调用，不意味着设备已经完成读取；复用还要尊重执行依赖。
+
+高层 tensor 值与物理存储的分离，使编译器能在保留值语义的同时作这些决定。MLIR 的一种具体机制是分析 tensor 使用关系，再转换成 memref 操作，详见官方 [Bufferization 文档](https://mlir.llvm.org/docs/Bufferization/)。这是一种实现方式，并非所有系统都采用相同 Pass。
+
+## 4. 编译产物与一次调用
+
+假设编译结果暴露一个接受三个缓冲区地址的函数：
 
 ```text
-Triton kernel
-CUDA kernel
-C++ kernel
-NPU kernel
-vendor library call
+compiled_add_relu(x_ptr, b_ptr, y_ptr)
 ```
 
-## Library Call 和 Generated Kernel
+这个签名只是说明交接关系：输入存储已经存在，调用方准备输出，函数把结果写入输出。真实接口还可能传尺寸、stride、workspace、执行流或描述符。
 
-AI Compiler 后端通常有两种执行方式：
+从产物到结果，可以区分三个动作：
 
-- 调用已有高性能库。
-- 生成自定义 kernel。
+1. **编译**：把计算表示变成目标代码，并确定调用约定。
+2. **装载与连接**：使代码能被当前进程或设备使用，解析必要的外部符号。
+3. **调用**：传入本次数据与参数，开始执行计算。
 
-Library call 适合：
+AOT 通常在部署运行前完成编译；JIT 可以在运行期间遇到某类输入时编译。两者都需要合适的装载与调用过程。GPU/NPU 的主机侧启动通常还通过运行库或驱动完成，不等于主机直接执行设备指令。
 
-- MatMul。
-- Conv。
-- BatchMatMul。
-- 高度优化的 Softmax/LayerNorm。
+输出分配、临时空间管理和执行依赖，可能部分写入生成的调用包装代码，部分由外部运行时负责。因此不应把 memory planning、guard、缓存都固定归给同一个 Runtime 组件。
 
-Generated kernel 适合：
+## 5. 产物复用与有效条件
 
-- elementwise chain。
-- simple reduction。
-- fused epilogue。
-- shape/layout 特化场景。
+假设产物使用固定偏移 `3*i+j`，只支持连续的 float32 `[2,3]` 输入。下一次传入同样条件下的另一组数值，可以复用代码；传入 `[4,3]` 则超出这个例子的固定行数契约。
 
-Fusion pass 要考虑：融合后是否还能使用高性能 library。不能为了少一个中间 tensor 而破坏大算子的主性能路径。
+也可以生成接受动态行数 `N` 的版本。只要其余约束满足，多个行数就能共用它。运行时检查（guard）用于确认输入是否落在某个产物的适用范围；失败后如何处理，可能是选择其他版本、重新编译、回退，或直接报错，取决于系统。
 
-## Runtime 负责什么
+缓存保存已有产物，检查确认是否适用。它们协作减少重复编译，但不能把输入值相同、shape 相同、全部编译条件相同混为一谈。前文的布局差异就是 shape 相同却仍需区分的例子。
 
-Runtime 不是单纯“调用 kernel”。常见职责：
+## 自查
 
-- 分配 output tensor。
-- 分配 workspace。
-- 做 memory planning。
-- 管理 compiled artifact cache。
-- 检查 shape/dtype/layout guard。
-- 选择 kernel 或 fallback。
-- 管理 stream/event。
-- 调用 kernel 或 library。
+1. 图上已经融合 Add 和 Relu，为什么仍需检查生成代码，才能判断是否减少了中间访存？
+2. 两个临时值大小相同，为什么还不能直接决定复用存储？
+3. 用固定 shape 编译与把输入元素绑定为常量有什么区别？
 
-执行链路：
-
-```text
-check guards
-  -> allocate outputs/workspace
-  -> get compiled kernel from cache
-  -> launch kernel / library call
-  -> return tensor handles
-```
-
-## Guard 和 Cache
-
-JIT 型 AI Compiler 需要判断已编译代码能否复用。
-
-cache key 可能包含：
-
-- graph structure。
-- shape / symbolic shape。
-- dtype。
-- layout。
-- device。
-- compile options。
-- target capability。
-
-guard 用于运行时检查：
-
-```text
-input shape == expected
-input dtype == expected
-input stride/layout satisfies constraint
-device matches
-```
-
-dynamic shape 下，guard 和 cache key 的设计会影响 compile 次数和运行时稳定性。
-
-## Memory Planning
-
-Memory planning 决定中间 tensor 和 workspace 如何分配/复用。
-
-优化目标：
-
-- 降低 peak memory。
-- 复用生命周期不重叠的 buffer。
-- 减少分配次数。
-- 保证 alignment。
-- 避免不必要的 host-device copy。
-
-Fusion 会改变 memory planning：
-
-- 删除中间 tensor。
-- 改变 buffer lifetime。
-- 可能新增 fused kernel workspace。
-- 改变 output layout。
-
-因此 fusion 后通常要重新做 lifetime analysis 或 memory planning。
-
-## 对 NPU IR 的意义
-
-NPU IR 融合的 graph 结果最终要满足 lowering/runtime：
-
-- fused op 有后端实现。
-- shape/dtype/layout 能确定。
-- workspace 可分配。
-- kernel launch 参数可生成。
-- memory scope 能映射到 GM/UB/L1/L0。
-- runtime 能缓存和复用编译产物。
-
-这也是为什么 NPU IR fusion 不能只看 graph pattern，还要看后端 capability 和 runtime 成本。
+这五篇建立了从计算表示到执行的共同认识。下一步可进入 [TVM](../tvm/) 或 [PyTorch Compiler](../pytorch-compiler/)，观察具体系统怎样作这些决定。设备专属的存储与融合限制在 [NPU Lowering 约束](../npu-ir/lowering_constraints)中展开。

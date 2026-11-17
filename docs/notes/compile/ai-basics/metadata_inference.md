@@ -1,118 +1,87 @@
 ---
 order: 3
 title: Metadata Inference 基础
-updated: 2026-07-05
+updated: 2026-10-30
 tags: [ai-compiler, metadata, shape, layout]
 status: draft
 ---
 
 # Metadata Inference 基础
 
-相关入口：[AI Compiler 基础](/notes/compile/ai-basics/)
+相关入口：[AI Compiler 基础](./)
 
-Metadata inference 为 graph 上的 tensor value 补充 shape、dtype、layout、alias、device 等信息。没有 metadata，graph rewrite 和 lowering 很难安全进行。
+编译器看到 `t = Add(x, b)`，可以知道有一次加法，却还不知道输出有多大、如何访问偏置、能否使用某个实现。Metadata inference 的作用，是依据输入信息和操作契约，推导后续决定所需的事实。
 
-## Metadata 类型
+这里的 metadata 泛指 shape、dtype 等描述信息。它们在不同 IR 中可能是类型的一部分、附加字段或独立分析结果；存储布局和别名也可能要到更低层才逐步确定。
 
-常见字段：
+## 1. 沿数据依赖推导形状
 
-```text
-shape
-dtype
-layout
-stride
-device
-requires_grad
-alias / view
-memory_format
-symbolic shape constraint
-```
-
-AI Compiler 里的“语义正确”和“后端可执行”都依赖这些信息。
-
-## Shape Inference
-
-shape inference 根据 op schema 推导输出 shape。
+考虑以下示意程序，所有输入采用 float32，Add 使用按尾部维度对齐的广播规则：
 
 ```text
-Add([N, C], [C]) -> [N, C]
-MatMul([M, K], [K, N]) -> [M, N]
-ReduceSum([N, C], axis=1, keepdim=true) -> [N, 1]
+x: [N, 3]
+b: [3]
+t = Add(x, b)
+s = ReduceSum(t, axis=1, keepdim=true)
 ```
 
-它回答：
-
-- 输出 tensor 有多大。
-- broadcast 是否合法。
-- reduction 后维度如何变化。
-- reshape/view 是否保持元素数量。
-- dynamic shape 下需要哪些约束。
-
-## Dtype Inference
-
-dtype inference 决定输出类型和内部计算类型。
+先看 Add。把 `[3]` 与 `[N, 3]` 的尾部维度对齐，偏置的三个元素分别对应每行的三列，因此：
 
 ```text
-Add(fp16, fp16) -> fp16
-Cast(fp16 -> fp32) -> fp32
-MatMul(fp16, fp16) -> fp16 output, fp32 accumulator? 
+t.shape = [N, 3]
+t[i, j] = x[i, j] + b[j]
 ```
 
-融合时 dtype 很关键，因为移动 cast 或改变 accumulation dtype 会改变数值语义。
+再看 ReduceSum。它把每一行的三列归约为一个数，并保留该维度，所以 `s.shape = [N, 1]`。若 `keepdim=false`，输出则是 `[N]`。
 
-## Layout Inference
+这里不需要知道 `x` 中的具体数值，也不一定需要知道 `N`。推导使用的是操作契约与维度关系。编译器可以保留 `N`，让运行时决定循环执行多少行。
 
-layout / stride / memory_format 决定 tensor 如何在内存中排列。
+改变一个条件：把 `b` 换成 `[K]`。现在必须满足 `K=1` 或 `K=3` 才能按这条规则广播。若编译期无法证明，就不能直接生成假定 `K=3` 的访问；系统可能保留运行时检查、选择特化版本，或拒绝当前编译路径。
+
+实际推导也可能不完整，例如输出大小依赖张量内容时，单靠输入 shape 往往无法确定结果尺寸。[ONNX 的 Shape Inference 文档](https://onnx.ai/onnx/repo-docs/ShapeInference.html)说明了这类推导能力与限制。
+
+## 2. 数据类型与计算契约
+
+shape 确定元素的位置，dtype 影响如何解释和计算这些元素。若两个输入类型不同，输出类型要由操作及框架的类型提升规则决定，不能套用一条跨系统的固定规则。
+
+归约还要区分输入类型、累加类型与输出类型。例如一种实现可能读入低精度元素，在更高精度中累加，最后转换成输出类型。把中间转换移动到归约之前或之后，会改变舍入发生的位置。
+
+因此类型信息不仅用于给缓冲区计算字节数。它还决定某次改写是否保留了数值契约、某个后端实现是否适用。优化器必须在当前操作允许的数值语义下作决定。
+
+## 3. 逻辑形状与存储布局
+
+两个张量都有 `[2, 3]` 的 shape，也可能按不同方式存放。以元素为单位，忽略基址和 offset 后，下面两种二维视图的地址计算分别是：
 
 ```text
-NCHW
-NHWC
-contiguous
-channels-last
-vendor format
+shape=[2,3], strides=[3,1]：位置(i,j) → 3*i + j
+shape=[2,3], strides=[1,2]：位置(i,j) → i + 2*j
 ```
 
-Graph rewrite 需要知道：
+位置 `(1,2)` 的偏移在两者中恰好都是 5，但 `(0,1)` 分别是 1 和 2。只检查 shape 相同不足以复用一份假定连续行布局的代码。
 
-- op 是否支持当前 layout。
-- layout transform 是否是 view 还是 copy。
-- producer 能否直接生成 consumer 需要的 layout。
-- fused op 的输出 layout 是什么。
+布局信息会影响访问式、连续加载和实现选择。不过，高层值语义 IR 可以暂时没有确定物理布局；后续编译阶段再选择它。NCHW、NHWC 等逻辑维度约定，也需要结合 stride 或具体格式才能确定物理地址。
 
-## Alias / View Inference
+一个布局变换可能只改变视图描述，也可能搬运数据。是否需要 copy，要看原存储是否能支持目标访问关系，以及操作契约是否允许共享存储。
 
-一些 op 不分配新 buffer：
+## 4. 别名关系与存储复用
 
-```text
-view
-reshape
-squeeze
-slice
-transpose
-```
+假设 `w` 是 `a` 的一个共享存储视图，程序随后通过 `w` 写入元素，又读取 `a` 对应位置。后一次读取会受到写入影响。若优化器只看到两个不同名称，就把读写当作互不相关，可能错误重排程序。
 
-它们可能和输入共享 storage。alias 信息影响：
+别名分析负责回答不同引用是否可能访问相同存储。它与 shape 推导相关，但不是同一件事：相同 shape 不意味着共享存储，不同 shape 也不意味着存储独立。
 
-- 能否删除中间 value。
-- in-place op 是否安全。
-- buffer 是否可复用。
-- pass 是否能重排 op。
+类似地，reshape 在某些布局下可以作为视图，在另一些情况下需要复制。不能把一个操作名永久归类为“绝不分配”。在纯 tensor 值语义阶段，还要区分逻辑结果关系与未来 buffer 的复用决定。
 
-## Metadata Inference 的位置
+## 5. 改写后的信息维护
 
-典型 pipeline：
+若把前面的归约从 `keepdim=true` 改成 `false`，输出从 `[N,1]` 变为 `[N]`。后续使用者的广播规则也可能随之变化，因此这不只是给一个节点改字段：必须重新判断受影响的使用关系。
 
-```text
-graph import
-  -> metadata inference
-  -> graph rewrite
-  -> metadata update / re-inference
-  -> lowering
-```
+即使一次改写保持输出 shape 不变，原先记录的使用次数、别名或存储生命周期也可能失效。工程上可以局部更新受影响的信息，也可以让相关分析失效后重新计算。选择取决于正确性、实现复杂度和分析成本，并不由是否面向某种设备决定。
 
-每次 graph rewrite 后，metadata 可能失效。工程上通常有两种策略：
+后续阶段真正需要的是可信的信息：已证明的事实、仍未知的部分，以及依赖的约束应当能区分。缺少证明时保守处理，比把旧分析结果当作新程序的事实更可靠。
 
-- 局部更新：rewrite pass 为新 op 计算 metadata。
-- 全图重推：简单但成本更高。
+## 自查
 
-NPU IR 融合通常需要局部更新，因为 fused op 的 metadata 是后续 lowering 的输入。
+1. `N` 未知时，为什么仍能推导 `s` 为 `[N,1]`？这与提前算出 `s` 的元素有什么区别？
+2. 两个输入 shape、dtype 相同，为什么仍可能无法使用相同的连续访存代码？
+
+下一篇：[Graph Rewrite 与 Pass 基础](./graph_rewrite_pass)。具体的信息组织和约束机制见 [Relax](../tvm/02_relax)与 [PyTorch 特化](../pytorch-compiler/03_specialization)。
