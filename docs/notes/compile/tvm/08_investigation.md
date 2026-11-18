@@ -1,127 +1,131 @@
 ---
 order: 8
-title: 完整模型观察与有限编译器修改
-updated: 2026-10-28
+title: Relax 改写、调度修改与问题定位
+updated: 2026-10-30
 ---
 
-# 完整模型观察与有限编译器修改
+# Relax 改写、调度修改与问题定位
 
-前面各章已经分别解释了导入、图变换、TensorIR、调度和运行时。现在重新看最初的一行模型，目标是能指出每项信息在哪里产生、在哪次变换中改变、最终由谁消费，并据此完成一个有边界的修改。
+前面的章节解释了 TVM 已有机制。本章把其中一个决定交给我们自己实现：识别连续两次 ReLU，删除外层重复计算。任务很小，却会经过实际图匹配、替换、Pass接入、lowering和CPU执行，适合建立“怎样修改编译器”的完整经验。
 
-本章先完成一次调查：为什么最终只有一次融合函数调用，仍能看到中间矩阵？再改变一个条件，观察从 ReLU 改成 ReLU6 后应当在哪些位置出现变化。所有判断都围绕主例，而不是要求逐目录阅读上游源码。
+先实现规则，再验证共享使用者和不匹配情况，最后把同样的调查方法用于主模型和调度。它不是把激活换成另一种功能；优化前后的程序应保持约定的结果。
 
-## 1. 固定主例与观察对象
+## 1. 从重复计算确定改写目标
 
-仍然计算 `relu(x @ weight + bias)`，以2×3输入、3×2权重和长度2偏置为基线，预期结果为：
+先看纯张量数据流：
 
-```text
-[[0.5, 7.5],
- [1.5, 0.0]]
+```python
+with R.dataflow():
+    inner = R.nn.relu(x)
+    result = R.nn.relu(inner)
+    R.output(inner, result)
+return inner, result
 ```
 
-接下来观察的对象每次都不同：
+inner 的元素已经经过同一种 ReLU，再应用一次不会增加新的截断。期望输出变成：
 
-| 位置 | 此时要回答的问题 | 应看到的证据 |
-|---|---|---|
-| 源图 | 哪些计算进入了TVM？ | FX的matmul/add/relu及输入签名 |
-| Relax | 张量关系和shape是否正确？ | `[2,3]→[2,2]`推导、bias广播 |
-| Legalize后 | 操作实现来自哪里？ | 三个PrimFunc和call_tir调用 |
-| FuseOps后 | 哪些调用被组织为一组？ | 新的Primitive Relax函数 |
-| FuseTIR后 | 函数与buffer怎样连接？ | 一个融合PrimFunc，仍有内部临时量 |
-| Runtime lowering后 | 谁准备输出并调用？ | 分配、shape检查和低层调用 |
-| 执行后 | 是否保留原模型结果？ | 实际输出与参考比较 |
-
-每份证据回答自己的问题。最终输出正确不能证明中间一定发生了期望融合；某个函数名含fused也不能替代数值与访存观察。
-
-在主例的融合输出中，查看函数体仍能找到两个 alloc_buffer，分别接收 matmul 和 add 的结果。三个循环组按顺序读写它们，因此这里能确认“函数组合发生了”，不能确认“中间矩阵已消除”。进一步查看 LLVM 输出或实际性能，是调查物理实现的后续工作。
-
-这个调查采用了三个不同证据：Relax 的一次 call_tir 说明模型调用关系，PrimFunc 的循环和 buffer 说明内部数据流，最终数值说明这次转换保留了计算结果。三个证据各自回答一个问题，不能互相替代。
-
-## 2. 一条有限源码链
-
-当需要解释实现时，可以沿这条范围明确的链阅读：
-
-```text
-FX importer翻译matmul
-  → Relax matmul的结构信息与legalization规则
-  → LegalizeOps生成PrimFunc/call_tir
-  → FuseOps/FuseTIR组织共同优化范围
-  → VM build拆分模型组织与数值函数
-  → LLVM生成代码，VM调用结果
+```python
+with R.dataflow():
+    inner = R.nn.relu(x)
+    R.output(inner)
+return inner, inner
 ```
 
-每次阅读只追主例相关分支。比如想解释bias如何广播，就从add的shape推导和生成的索引入手，不必同时通读所有frontend操作。
+保留 inner 的两个逻辑使用，只消除外层计算。这里讨论 Relax 的纯张量值语义；如果导入源语言还要求两个返回对象可被独立原地修改，导入/调用边界必须另行保存这种可观察契约，不能直接把本规则当成任意 Python Tensor 对象的替换规则。
 
-真正准备改某个pass时，再把阅读范围扩到其匹配条件、使用的分析、输出契约和测试。源码阅读的深度由要证明的结论决定，而不是由文件大小决定。
+输入 `[-2,0,3,8]` 的两项结果都应为 `[0,0,3,8]`。但 `relu(negative(x))` 不能套这条规则：x=-2 时应该返回2，改成 relu(x) 会得到0。
 
-## 3. 模型语义修改与等价优化
+## 2. DPL 描述的是匹配关系
 
-有两种常见修改，验证方式不能混淆。
+Relax 的 Dataflow Pattern Language 可以表达这个局部结构：
 
-第一种是**改变模型功能**，例如把ReLU改成上限为6的截断激活：
+```python
+from tvm.relax.dpl import wildcard, is_op, rewrite_call
 
-```text
-y = min(max(x @ weight + bias, 0), 6)
+x = wildcard()
+inner = is_op("relax.nn.relu")(x)
+outer = is_op("relax.nn.relu")(inner)
 ```
 
-原来7.5的元素现在应为6。你需要修改源模型或相应IR，并使用新的参考函数验证。它不是保持原程序语义的优化。
+x 接受任意输入表达式；inner 要求一个参数为 x 的 ReLU；outer 再要求消费 inner 的 ReLU。实际 Relax 往往先把 inner 绑定到变量，outer 使用该变量。匹配机制沿绑定关系认识这条数据流，不要求两个调用直接嵌在同一个文本表达式里。
 
-第二种是**改变实现方式**，例如给矩阵函数换一份schedule。输出语义应保持原样；变化发生在循环、访存和执行组织上。此时参考结果仍然是原矩阵计算。
+模式表达候选形状，语义理由来自第一节。同名操作的契约是本规则成立的依据；不能只把匹配到的两个任意“激活操作”都视为重复。
 
-将二者分开，才能避免“改了结果所以优化失败”或“只要输出有变化就说明pass生效”的误判。
+## 3. 替换回调与 Pass 接入
 
-## 4. 有限调度任务
+下面是完整的规则实现，依赖已经导入的 tvm.relax：
 
-独立任务使用前章32×32 Matmul：将j按传入tile分块，安排 `i,jo,k,ji`，向量化空间内层，并拆开归约初始化。
+```python
+@relax.transform.function_pass(opt_level=0)
+class RemoveRepeatedRelu:
+    def transform_function(self, func, mod, ctx):
+        x = wildcard()
+        inner = is_op("relax.nn.relu")(x)
+        outer = is_op("relax.nn.relu")(inner)
 
-开始编码前，先写下预期结构：
+        def replace(call, matched):
+            return matched[inner]
 
-```text
-每个i/jo：
-  初始化这一组有效输出
-  沿k累加
-    同时推进这一组有效列
+        return rewrite_call(outer, replace, func)
 ```
 
-tile=7时还要预测最后一组的有效范围。实现后检查：32列是否恰好覆盖一次，初始化是否只在归约开始时发生，k是否仍然对同一输出累计，生成谓词是否排除额外位置。
+`matched` 连接模式对象与匹配到的表达式。回调返回的是已经匹配的内层结果，不是原始 x；后者可能仍有负数。rewrite_call 负责将替换应用到函数并维护绑定，function_pass 将此函数级变换接入模块Pass系统。
 
-数值验证使用多个随机输入，特别关注含正负贡献的情况。只用全正矩阵，可能掩盖某些错误的激活位置或初始化问题。
+与手工编辑IR不同，回调不是自己删除图上所有看似相关的节点。inner 仍是输出或其他操作的输入时，它必须留下。实际改写结果只有一次 ReLU，函数返回 `(inner, inner)`，负例函数保持结构相同。
 
-性能比较在正确性之后进行。即使tile=7更慢，只要语义与调度意图都成立，它仍然是一个有价值的对照；解释资源和尾部成本比强求每次修改都加速更重要。
+这与 MLIR 的 pattern/rewriter 有相近问题域，但接口协议不同。此处回调返回替换表达式，由Relax改写设施整理函数；不要把MLIR的replaceOp调用方式直接移植过来。
 
-## 5. 按第一个偏差定位问题
+## 4. 让规则真正进入编译流程
 
-先以一个假设错误说明“第一个偏差”怎样定位：原始模型的第二列应读取 bias[1]=-0.5；某次错误改写把它变成 bias[i]。第一行第二列原来是 `8-0.5=7.5`，错误实现却得到 `8+0.5=8.5`。
+规则定义本身不执行优化。把它应用到模块，再交给后续流程：
 
-最终看到8.5，只能说明行为偏离参考。继续比较：如果导入后的 Relax 仍是正确的广播加法，而某个 TensorIR 第一次出现 `bias[i]`，调查就可以缩到生成或改写这个访问表达式的阶段。无需先怀疑 VM 分配，也不必通读整个编译器。
+```python
+rewritten = RemoveRepeatedRelu()(mod)
+optimized = relax.get_pipeline("zero")(rewritten)
+executable = tvm.compile(optimized, target="llvm")
+vm = relax.VirtualMachine(executable, tvm.cpu())
+```
 
-这个反例还解释了为何小测试不宜只用全零 bias：那样 i/j 索引写错也可能得到相同结果。用于诊断的输入应让待区分的访问产生不同值。
+应在 high-level ReLU 仍存在时执行该规则。如果先做LegalizeOps，候选可能已经是call_tir；原模式不再匹配，不代表回调写错，而是插入阶段不对。
 
+验证时分别回答三件事：
 
-假设结果不对，可以依次缩小范围：
+| 证据 | 回答的问题 |
+|---|---|
+| 改写后的Relax只剩一次ReLU | 我们的规则是否真的生效 |
+| 不匹配函数保持结构相同 | 是否扩大了规则适用范围 |
+| 改写前后都编译运行、比较全部输出 | 图改写与后续实现是否一起保持结果 |
 
-**导入后已经表达错误。** 先比较源图和Relax，查看transpose、broadcast、dtype或参数绑定。若这里就不一致，后端再正确也无法修复源语义遗漏。
+CPU参考使用混合正负、全负、全正及包含NaN/无穷/负零的输入，比较前后数值（NaN按对应位置比较）。这不是对所有浮点位模式、布局和源语言别名行为的形式化证明；支持范围应与规则和测试一起陈述。
 
-**Legalize或融合后第一次变化异常。** 对比前后调用和buffer连接，关注输出参数、形状和多个消费者。可以临时停在该pass前后单独执行或构造更小测试。
+## 5. 从参考实现到自己的修改
 
-**只有调度版本错误。** 回到原始TensorIR，逐条应用schedule并观察结果；优先检查覆盖范围、初始化、归约和尾部条件。
+这一章提供完整参考规则，是为了让扩展链可见。独立练习不要求从空文件重建工程：可以在现有测试入口下增加一个有明确语义的模式，先写预期变换和拒绝条件，再实现回调。
 
-**数值函数正确但模型调用失败。** 检查输入设备/dtype/shape、输出分配、外部符号和runtime。某次shape检查失败与数值内核越界不是同一类问题。
+例如尝试折叠两次相同、互为逆的转置，先限制秩和axes均已知，检查两次置换的复合确实为恒等，保留不满足条件的图。不能仅凭“有两次transpose”就删除；三维的两次相同置换未必回到原布局。需要另外考虑所选IR层的值语义与下游布局实现，不将练习结果冒充所有框架的view优化。
 
-定位时尽量保留第一个能复现问题的小例子。直接修改完整模型里的多个pass，往往同时改变太多条件，反而更难确认原因。
+调度方向则继续使用已有独立骨架：为32×32 Matmul实现参数化列分块，比较tile4/8/7，并解释有效范围、初始化和k累加顺序。选做缓存扩展时，先预测producer的范围和次数，再检查实际IR；不以新增接口数量作为完成标准。
 
-## 6. 与后续学习的连接
+这两个任务分别练习图层语义改写与计算组织修改，不要求每学一节都写一次实验。
 
-完成这一轮后，应该能在一个完整系统里识别四类工作：图表示和变换、张量程序调度、目标代码生成、运行时集成。它们都可能成为进一步研究与开发的方向。
+## 6. 发现问题时寻找第一个偏差
 
-随后学习PyTorch Compiler，可以用同一个模型比较捕获与导入、符号约束、图规范化、生成内核和运行调用。再进入Triton/Triton-Ascend时，则把视角进一步缩到一段kernel如何经历IR变化、布局选择、存储与同步、目标指令和launch。
+回到 `relu(x @ weight + bias)`。如果主例第二列由7.5变为8.5，可能是某个访问把 bias[j] 写成了 bias[i]。第一行第二列本来取-0.5，却误取+0.5。
 
-这不要求现在选定唯一职业方向。更有效的依据是完成一次图层修改、一次调度修改和一次运行时问题定位，观察自己在哪类问题中最想继续深入。
+先比较导入的Relax，再比较Legalize后的PrimFunc，最后检查调度和目标代码。若Relax仍表达正确广播，而某份TensorIR第一次出现bias[i]，就把调查收敛到产生这份访问的变换；无需同时怀疑VM和全部后端。
 
-## 7. 阶段自查
+另一个现象是函数名含fused，但仍有两个alloc_buffer。一次Relax调用只能证明函数组合；TensorIR循环与buffer才能说明内部数据流；目标代码与测量再回答物理实现和实际成本。这些证据回答不同层次的问题。
 
-1. 主例只有一次融合调用但仍有两个 alloc_buffer，这两份证据各能说明什么？
-2. 第二列结果由7.5变成8.5，如何利用 bias 的索引把调查缩到第一个偏差阶段？为什么全零 bias 不适合发现这个错误？
-3. 修改激活语义和修改调度时，参考输出分别应怎样处理？性能比较之前各需要确认哪些关系？
+对自己的改写也一样：规则没有触发，先查模式和插入阶段；触发但结果错，先查替换与使用者；只有编译后的结果错，再追后续阶段。保留最小复现输入，每次只改变一个条件。
 
-独立骨架、参考实现和观察过程见 [TVM labs](https://github.com/jnfkdsn/aicompiler/tree/main/tvm-e2e)。源码入口包括 [FX importer](https://github.com/apache/tvm/blob/v0.20.0/python/tvm/relax/frontend/torch/fx_translator.py)、[legalize规则](https://github.com/apache/tvm/tree/v0.20.0/python/tvm/relax/transform/legalize_ops)、[Schedule primitives](https://github.com/apache/tvm/tree/v0.20.0/src/tir/schedule/primitive) 和 [VM build](https://github.com/apache/tvm/blob/v0.20.0/python/tvm/relax/vm_build.py)。
+## 7. 设计取舍与阶段结果
+
+TVM提供两条本章已经实际走通的扩展方式：用Relax规则改写计算关系，用Schedule程序改写张量实现。前者依赖操作语义、绑定和结构信息，后者依赖计算块、读写和循环约束。编译器基础设施承担通用的遍历、维护与后端连接，我们需要对新决策的语义和适用条件负责。
+
+本轮目标是能够解释并修改一个有限行为。通读所有源码、实现新后端和证明最优性能都不是它的前置。后续学习PyTorch时可以用相同重复ReLU问题比较FX修改与调用边界；进入Triton时再把重点转向kernel IR、布局和设备lowering。
+
+1. 回调为什么返回matched[inner]而不是matched[x]？inner还有另一个使用者时为什么不能直接删除？
+2. Legalize之后原规则不匹配，应先检查什么？只比较最终数值能否证明这条规则执行过？
+3. 修改shape为其他值、增加另一种激活或改变源语言别名约定，哪些前提需要重新确认？
+
+参考工程与前后IR来自 [design_probe](https://github.com/jnfkdsn/aicompiler/blob/main/tvm-e2e/design_probe.py)。精确协议可查 [DPL rewrite_call](https://github.com/apache/tvm/blob/v0.20.0/python/tvm/relax/dpl/rewrite.py) 与 [function_pass](https://github.com/apache/tvm/blob/v0.20.0/python/tvm/relax/transform/transform.py)；独立调度练习仍在 [TVM labs](https://github.com/jnfkdsn/aicompiler/tree/main/tvm-e2e/exercises)。
