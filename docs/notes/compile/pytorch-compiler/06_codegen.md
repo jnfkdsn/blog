@@ -1,132 +1,191 @@
 ---
 order: 6
-title: 融合、调度与生成程序的执行
-updated: 2026-10-17
+title: 目标代码、执行包装与编译器修改
+updated: 2026-10-30
 ---
 
-# 融合、调度与生成程序的执行
+# 目标代码、执行包装与编译器修改
 
-上一章把张量运算展开成了索引、计算和存储关系。接下来必须形成一个真正的执行方案：哪些计算放在一起，怎样遍历输出，哪里调用库，谁分配内存，以及生成代码如何变成可调用程序。
+第五章得到一个融合组，含义是两个计算可以共同生成实现。这个组还没有可调用地址，也没有为本次输入分配输出。接下来要把循环体变成目标代码，编译装载，再让wrapper按协议调用。
 
-本章先沿主例看一次调度决定，再用 Softmax 观察“放进一个函数”和“消除中间存储”之间的区别，最后连接到 CPU、GPU 代码生成与运行。
+本章先沿逐元素双输出例子走通CPU执行，再解释GPU/Triton的对应边界。最后在实际backend入口加入一个很小的FX改写，通过前后图与数值验证，完成从“观察生成代码”到“修改一次编译决定”的连接。
 
-## 1. 调度对象与依赖关系
+## 1. 调度结果怎样进入 CPU 代码
 
-在固定 CPU 例子中，后端已有两项工作：
-
-```text
-addmm(x, weight, bias) → buf0
-relu(buf0)            → 最终输出
-```
-
-ReLU 必须等 addmm 产生所需数据后才能读取。scheduler 从读写关系建立依赖，并在这些约束内组织执行。它面对的既有可展开的内部计算，也有具备固定调用接口的外部实现。
-
-融合前首先要回答是否合法。例如把消费者提前到生产者完成之前，会读到未定义数据；忽略别名引起的写入，会改变读取值。合法以后，还需判断收益：减少内存流量和调用开销，是否足以弥补更大的内核、更多寄存器占用或重复计算。
-
-对主例而言，选中的 addmm 是外部实现，ReLU 没有被合进其内部。后端保留一次库调用与一次生成内核的调用。这是本例观察到的方案，不是所有 shape、目标和配置下固定不变的结果。
-
-## 2. 逐元素融合中的数据变化
-
-为了单独理解融合，暂时把 bias 加法也作为可生成计算。分开执行时，逻辑上可能是：
-
-```text
-第一遍：读 M、读 bias → 写 A
-第二遍：读 A → 写 Y
-```
-
-每个 `(i,j)` 的加法结果只用于同位置的 ReLU，因此可以合为：
-
-```text
-同一遍：读 M、读 bias → 在局部计算 add 和 relu → 写 Y
-```
-
-省掉的主要是 A 的一次写入和一次读取，以及可能的一次调用。算术操作数目并没有因为融合而消失。
-
-如果 A 还要作为输出返回，则必须保留其可观察值。此时可以考虑同一内核写两个输出，也可以保持独立阶段，但不能继续声称 A 完全不需要存储。
-
-如果多个消费者重复内联同一个昂贵表达式，融合还可能增加计算量。比如把一个大归约分别内联进多个输出，不一定比先计算一次并存储更合算。数据复用既可以发生在内核内部，也可以通过明确的中间结果实现。
-
-## 3. Softmax 的融合层次
-
-考虑一行 Softmax 的稳定形式：先求最大值，再计算 exp，随后求和与归一化。每一步有明确的数据依赖。
-
-在本机 `[2,3]` 的 CPU 观察中，最终生成了一个名为 `cpp_fused__softmax_0` 的 C++ 函数。若只看函数名，很容易以为所有中间量都已留在寄存器里。实际 wrapper 仍然分配两块 2×3 存储：
+仍然计算：
 
 ```python
-temporary = empty_strided_cpu((2, 3), (3, 1), torch.float32)
-output = empty_strided_cpu((2, 3), (3, 1), torch.float32)
-cpp_fused__softmax_0(x, temporary, output)
+def observable(x, y, z):
+    a = torch.relu(x + y)
+    return a, a * z
 ```
 
-生成函数内部包含两组循环。下面是保留依赖关系的等价示意：
+固定长度33、连续float32的CPU生成物中，两个scheduler节点已经组成一个融合组。C++生成器将其索引与计算转换成循环。下列片段来自实际生成结果，参数和临时名为便于阅读做了重命名，展示完整向量段：
+
+```cpp
+auto vx = at::vec::Vectorized<float>::loadu(x + p, 16);
+auto vy = at::vec::Vectorized<float>::loadu(y + p, 16);
+auto vz = at::vec::Vectorized<float>::loadu(z + p, 16);
+auto sum = vx + vy;
+auto a = at::vec::clamp_min(sum, decltype(sum)(0));
+auto result = a * vz;
+a.store(out_a + p);
+result.store(out_result + p);
+```
+
+此机器的输出按16个元素一组推进。p=0和16处理完整段，p=32只剩一个元素，生成代码使用有效长度1的加载和存储。16是本次目标与实现的观察，不是Inductor固定要求的向量宽度。
+
+这里的a同时写入第一个输出、参与乘法，没有先写出再从out_a加载。两个输出仍各有存储，因为调用者需要两份结果。这样就能将第五章的融合决策连接到具体访存，而不是只看函数名里有没有fused。
+
+## 2. 编译、装载与调用
+
+实际output_code.py使用 `async_compile.cpp_pybinding` 提交C++实现，等待编译结果可用，再在wrapper中调用。核心结构为：
 
 ```text
-循环组一：
-  对每个输出位置，读取本行的三个元素并求最大值
-  temporary[i,j] = exp(x[i,j] - row_max)
-
-循环组二：
-  对每个输出位置，读取本行 temporary 的三个元素并求和
-  output[i,j] = temporary[i,j] / row_sum
+生成C++源和接口描述
+    ↓ 本机C++编译、链接；缓存命中时可复用产物
+得到并装载可调用实现
+    ↓
+wrapper(x,y,z)：
+    检查必要的shape/stride约定
+    分配out_a和out_result
+    调用内核(x,y,z,out_a,out_result)
+    返回两个Tensor
 ```
 
-归约长度很小，生成代码将对应 max/sum 展开为显式元素表达式。它把多个阶段包装在一次 C++ 调用里，但仍然具有中间存储和多个循环组。
+生成源码是在构造程序，编译把它变成目标代码，装载使当前进程能够取得执行入口，调用才读取本批次的33个元素。后续条件仍满足时，可以直接复用执行入口，不必每次编译C++。
 
-所以观察融合时至少要区分三个层次：图节点怎样组合，生成了多少调用，内部还读写哪些中间数据。一个函数名不能回答全部问题。
+本例wrapper分配两个长度33的输出。若只返回最终乘法结果，第五章的单输出变体可以只有一个输出分配；若某个旧值已经不再使用，其他案例还可能复用buffer。复用需要使用关系和别名依据，并非两个Tensor形状相同就能覆盖。
 
-输入 `[1000,1001,999]` 时，实验结果约为 `[0.2447,0.6652,0.0900]`，所有值有限且每行和接近 1。这个结果验证了本例的稳定数值计算；不能由此推出大维度 Softmax 的调度和性能相同。
+## 3. GPU 路径与 Triton 的职责
 
-## 4. CPU 与 GPU 的代码生成
+相同逐元素计算在GPU上需要划分工作、限制越界并安排设备调用。下面是对应计算的完整Triton核心示意，只针对连续float32与有限值输入帮助阅读；它不是本机Inductor生成物，也没有设备执行证据：
 
-选定执行组织后，代码生成器把索引和计算转换成目标语言。
+```python
+import triton
+import triton.language as tl
 
-CPU 路径可以生成 C++ 循环、向量类型和并行结构，再调用本机编译工具链得到共享库。主例的 ReLU 内核就包含向量加载、负值截断与存储；因为只有 4 个元素，还需要处理短向量有效范围。
+@triton.jit
+def pointwise(X, Y, Z, OUT_A, OUT_R, N: tl.constexpr,
+              BLOCK: tl.constexpr):
+    p = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    valid = p < N
+    x = tl.load(X + p, valid, other=0.0)
+    y = tl.load(Y + p, valid, other=0.0)
+    z = tl.load(Z + p, valid, other=0.0)
+    a = tl.maximum(x + y, 0.0)
+    tl.store(OUT_A + p, a, valid)
+    tl.store(OUT_R + p, a * z, valid)
+```
 
-GPU 路径常见生成 Triton 程序，再由 Triton 完成自身的 IR 转换、目标 lowering 和设备代码生成。这里至少有两层选择：Inductor 决定哪些计算形成 kernel 以及如何组织一部分计算；Triton 再把这段 kernel 程序映射为目标可执行实现。
+N=33、BLOCK=32时，两个program分别覆盖0..31与32..63，第二个只有p=32有效。program是Triton工作划分的单位，不等于“一项Python运算对应一个线程”；warp、lane和布局等具体映射还要由Triton及编译配置落实。边界mask必须保护访存，不能只在最后屏蔽结果。
 
-这条联系解释了为什么学习 Inductor 能帮助后续学习 Triton，但不能代替 Triton 的布局、线程映射、存储层次和同步知识。生成了一段 Triton 源码，也不等于已经验证设备执行。
+实际Inductor生成程序还带有启发式、配置和元信息，不必长得与这份教学代码完全相同。主要分工是：Inductor从模型图选择实现、形成融合组并生成Triton程序；Triton继续进行自身IR转换与目标代码生成；运行时通过设备入口和stream等协议发起执行。外部库调用也可以与生成的Triton内核共存。
 
-已有库调用可以出现在两种目标中。对于矩阵乘法等操作，后端可能比较库、模板或其他候选实现；可用候选和选择策略取决于目标、版本与配置。当前 CPU 主例采用外部 addmm，不据此推断其他平台的选择。
+本系列固定环境是2.7.1+cpu。配套GPU入口在有适用CUDA版PyTorch和设备时编译真实torch.compile变体、保存生成代码并校验结果；当前没有据此宣称GPU正确性或加速。这里也不能把其他版本的调度类名、输出格式直接套到本版本。
 
-## 5. Wrapper、内核与存储生命周期
+## 4. 库调用和归约为何形成不同实现
 
-生成的数值内核通常只接收指针、尺寸等参数并完成计算。外层 wrapper 还要完成其他工作：
+主模型 `relu(x @ weight + bias)` 的CPU结果采用addmm外部调用和独立ReLU内核。外部实现已经有自己的内部循环，scheduler不能像组合两个Pointwise表达式一样任意把ReLU塞进去。可以利用库的epilogue能力，或选择另一个整体实现，但需要相应实现与选择策略。
+
+Softmax则在内部产生归约依赖。此前固定 `[2,3]` CPU观察中，虽然函数名为 `cpp_fused__softmax_0`，wrapper仍准备temporary与output两块矩阵。整理后的计算为：
 
 ```text
-接收参数
-  → 检查必要的尺寸/步长约束
-  → 准备输出和临时存储
-  → 按依赖顺序调用库与生成内核
-  → 释放不再需要的引用，恢复返回结构
+循环组一：求行最大值，将exp(x-row_max)写到temporary
+循环组二：读取本行temporary求和，将归一化结果写到output
 ```
 
-主例的 wrapper 在 addmm 以后将 `buf1` 复用为 `buf0`，ReLU 直接覆盖它。这个决定发生在知道旧值不再被需要的前提下。
+小归约被展开成元素表达式，函数融合没有消除全部临时存储。对于更大归约，还要比较分块、共享统计量、重算及资源压力。一个函数里有几个循环、读写哪些buffer，比名称更能说明优化效果。
 
-注意三种“相同”：两个图值具有相同数值、两个变量引用同一个 Tensor、两项计算复用同一块存储，并不是同一件事。存储规划可以让先后存活的不同逻辑值使用同一地址，但不得破坏仍然活跃的值或用户可观察的别名。
+这些例子体现后端的取舍：逐元素表达式容易就地组合，归约需要保持跨元素依赖，已有库要求遵守调用边界。正确性、兼容性和实际成本共同决定最终方案。
 
-设备执行还涉及 stream、同步和设备内存等运行时约定。当前 CPU 验证没有执行这些 GPU/NPU 行为，后续目标后端课程会在真实设备链上展开。
+## 5. 一条可操作的诊断链
 
-## 6. 编译缓存与性能定位
+定位时先确定第一个异常出现在哪份表示，而不是同时阅读全部源码：
 
-Dynamo 缓存保护的是“当前 Python 调用是否可以使用已有编译版本”。Inductor 及其工具链还可以缓存图处理或生成代码的结果。即使上层发生一次新的 backend 交接，下层也可能找到已有编译产物。
+| 证据 | 重点检查 |
+|---|---|
+| Dynamo交给backend的FX图 | 捕获了什么，是否断图，参数与返回协议 |
+| AOT交给后端的ATen图 | mutation、分解、保存值和别名契约 |
+| ir_pre_fusion.txt | 哪些表达式已经组合，哪些结果被物化 |
+| ir_post_fusion.txt | scheduler实际合了哪些节点，保留哪些输出 |
+| output_code.py及目标代码 | 实际调用、索引、分配和中间读写 |
+| 数值与计时 | 是否保持行为，时间消耗在哪个边界 |
 
-反过来，磁盘上存在某个共享库，也不意味着任何输入都能直接调用它。尺寸、布局、设备和编译配置仍然属于使用条件。
+不同debug配置还会提供 `fx_graph_runnable.py` 等文件，名称和可用性随版本而变。不能把任意名为fx_graph的文件都当成未经规范化的Dynamo原图；先确认它由哪个编译边界保存。
 
-分析性能时可以沿三个问题收敛：
+例如双输出变体在pre阶段有两节点、post阶段有一组、代码仍分配两输出，这是符合契约的结果。若后一个输出覆盖了前一个，应调查存储和别名；若候选根本没合，才查看scheduler的合法性与收益判断。
 
-1. 时间花在捕获/编译还是稳态执行？
-2. 稳态执行里主要是库调用、生成内核，还是 wrapper 和数据搬运？
-3. 对占比最大的部分，限制来自计算吞吐、访存、并行度还是调用成本？
+性能也要划清范围：首次调用可能含捕获和编译，稳态主要执行生成程序；若总时间90%在addmm，只优化剩余ReLU的收益上限很有限。GPU计时还要处理异步执行。生成内核数、分配数和端到端时间是三项不同证据。
 
-如果是图频繁重编译，应回到形状与 guards；如果是某个生成内核慢，应看索引、布局和调度；如果是外部库占主导，优化另一段很小的 pointwise 代码不会带来同等比例的总收益。
+## 6. 在 Backend 中加入一次实际 FX 改写
 
-测量需要预热、明确线程/设备设置，并将编译开销单独记录。异步设备还要使用适当同步或设备计时；不能将排队时间当作内核完成时间。
+现在实现一个有限推理优化：将 `torch.relu(torch.relu(x))` 的外层ReLU删除。选择显式torch.relu调用，避免在一个练习中同时处理所有方法名和ATen重载。
 
-## 7. 推演与实践入口
+先考虑反例：
 
-1. 两个 pointwise 操作合为一个循环，主要可能节省什么？
-2. 为什么一个名为 fused 的 C++ 函数仍可能分配并读写中间 buffer？
-3. 当 addmm 已占总时间的绝大部分时，仅优化 ReLU 的收益受什么限制？
-4. 发现 CPU 输出正确，能否据此认定相同图的 GPU 路径也已验证？
+```python
+def shared(x):
+    a = torch.relu(x)
+    return a, torch.relu(a)
+```
 
-观察实验见 [labs 的 overview 与 inductor](https://github.com/jnfkdsn/aicompiler/tree/main/pytorch-compiler)。对应源码从 [scheduler.py](https://github.com/pytorch/pytorch/blob/v2.7.1/torch/_inductor/scheduler.py) 到 [C++ codegen](https://github.com/pytorch/pytorch/blob/v2.7.1/torch/_inductor/codegen/cpp.py)、[Triton codegen](https://github.com/pytorch/pytorch/blob/v2.7.1/torch/_inductor/codegen/triton.py) 和 [wrapper](https://github.com/pytorch/pytorch/blob/v2.7.1/torch/_inductor/codegen/wrapper.py)；读一条操作路径即可，不需顺序遍历全部生成器。
+两项结果的数值相同，但源程序返回两个分别产生的Tensor。若直接返回 `(a,a)`，调用者修改第一项就会改变第二项。数值比较可能发现不了这个错误。因此本规则保守地要求inner只有外层ReLU一个使用者，拒绝上述共享情况。
+
+完整的有限改写函数如下：
+
+```python
+def remove_repeated_relu(gm):
+    changed = 0
+    for node in list(gm.graph.nodes):
+        if node.op != "call_function" or node.target is not torch.relu or node.kwargs:
+            continue
+        if len(node.args) != 1:
+            continue
+        inner = node.args[0]
+        if not isinstance(inner, torch.fx.Node):
+            continue
+        if (inner.op != "call_function" or inner.target is not torch.relu
+                or inner.kwargs or len(inner.args) != 1 or len(inner.users) != 1):
+            continue
+        node.replace_all_uses_with(inner)
+        gm.graph.erase_node(node)
+        changed += 1
+    gm.graph.lint()
+    gm.recompile()
+    return changed
+```
+
+替换的是外层节点的使用引用，删除的是外层节点；inner保留。lint检查图结构，recompile更新GraphModule的Python执行代码，两者都不等于数值正确性证明，也不等于目标代码生成。
+
+把这项修改接入真实Inductor：
+
+```python
+from torch._inductor.compile_fx import compile_fx
+
+def backend(gm, example_inputs):
+    remove_repeated_relu(gm)
+    return compile_fx(gm, example_inputs)
+
+compiled = torch.compile(repeated, backend=backend, fullgraph=True)
+```
+
+其中repeated是本节的单输出重复ReLU函数。compile_fx继续组织第四章的AOT处理和后端编译，返回实际执行入口。该内部API固定于2.7.1，不作为跨版本稳定扩展接口承诺。
+
+## 7. 修改的验证与边界
+
+实际CPU参考验证三个函数：重复ReLU改写一次；共享inner的双输出函数不改写；`relu(-x)`不改写。每个函数用混合正负、全负、全正三组输入与eager比较。双输出还在返回后修改第一项，确认第二项没有被连带修改。
+
+我们同时保存backend入口的before/after FX，避免“结果正确，但自定义规则一次也没触发”。这项实验验证有限模式及调用链，没有覆盖训练、全部浮点特殊值、Tensor子类或所有原地语义，也没有证明性能优于Inductor已有优化。
+
+独立修改时，可以先扩展一个明确的模式或拒绝条件，再写对应反例。遇到长源码，先追`backend → compile_fx → 某次图交接`，或`scheduler候选 → can_fuse → 后端codegen`中的一条。需要解释哪项决定，就读到能确认该决定的位置。
+
+## 8. 推演与后续阅读
+
+1. 双输出变体为什么融合成一组后仍要两块输出存储？C++中的局部a省掉了哪次读取？
+2. 为什么图里有三个逐元素操作，不一定意味着scheduler融合前三个节点？如何通过三份输出区分？
+3. 删除重复ReLU为何检查inner的使用者？lint、数值比较和调用后修改输出分别保护什么？
+
+本章完成普通推理编译主线及一次有限扩展。下一章Export/AOT是部署专题，第八章研究训练协议；可以根据任务选择顺序，不把它们作为开始Triton学习的新门槛。
+
+[CPU参考与改写](https://github.com/jnfkdsn/aicompiler/blob/main/pytorch-compiler/design_probe.py)保存实际图、调度表示和代码。[GPU观察入口](https://github.com/jnfkdsn/aicompiler/blob/main/pytorch-compiler/gpu_probe.py)用于适用设备环境；核心源码为 [C++ codegen](https://github.com/pytorch/pytorch/blob/v2.7.1/torch/_inductor/codegen/cpp.py)、[Triton codegen](https://github.com/pytorch/pytorch/blob/v2.7.1/torch/_inductor/codegen/triton.py)、[wrapper](https://github.com/pytorch/pytorch/blob/v2.7.1/torch/_inductor/codegen/wrapper.py) 和 [compile_fx](https://github.com/pytorch/pytorch/blob/v2.7.1/torch/_inductor/compile_fx.py)。
