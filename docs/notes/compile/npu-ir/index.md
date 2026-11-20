@@ -1,7 +1,7 @@
 ---
 order: 70
 title: NPU IR 融合知识库
-updated: 2026-10-16
+updated: 2026-10-30
 tags: [ai-compiler, npu, ir, fusion, graph]
 status: draft
 ---
@@ -23,13 +23,19 @@ NPU IR 算子融合的核心任务：
 
 融合不是简单地把几个 op 合成一个 op。它同时涉及 graph 语义、tensor metadata、memory traffic、layout、buffer lifetime、NPU 片上存储和后端 codegen 能力。
 
-进入这部分前，先具备以下基础概念：
+## 通用基础在 NPU 优化中的应用
 
-- Graph IR 如何表示 op、tensor value 和 use-def。
-- shape、dtype、layout metadata 如何在 graph 上推导。
-- graph rewrite pass 如何匹配 pattern 并改写 IR。
-- lowering 如何把 graph/tensor IR 下沉到 kernel 或 library call。
-- runtime 如何处理 memory、stream、cache 和 guard。
+[AI Compiler 基础](/notes/compile/ai-basics/)解释跨系统的共同问题；本目录讨论这些问题在 NPU 融合中的具体约束。已有相关认识时可以直接阅读需要的专题，不必重新通读基础模块。
+
+| 通用概念 | 在 NPU 融合中需要进一步确认的事情 |
+|---|---|
+| 操作、值与使用关系 | 候选子图有哪些外部使用者，融合后哪些输出仍需保留 |
+| 信息推导 | shape、dtype、layout 是否满足后端支持条件，改写后信息是否仍可信 |
+| 程序改写 | 如何构造融合结果、修复引用，并保留效果和数值契约 |
+| 实现选择与调度 | 融合后能否得到可用的计算与搬运计划，是否失去更好的库实现 |
+| 存储与运行时 | 片上临时空间是否足够，workspace 与启动开销是否抵消收益 |
+
+GM、UB、L1、L0 等名称用于后文涉及的 Ascend 存储示例，不能直接作为所有 NPU 的统一模型；具体容量、可访问关系和支持能力要以目标型号及工具链为准。
 
 ## 主线结构
 

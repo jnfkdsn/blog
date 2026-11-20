@@ -1,7 +1,7 @@
 ---
 order: 8
 title: NPU Lowering 约束
-updated: 2026-07-05
+updated: 2026-10-30
 tags: [ai-compiler, npu, lowering, codegen]
 status: draft
 ---
@@ -161,6 +161,18 @@ fusion candidate
 - 对高频失败 pattern 补充 legality/profitability 规则。
 
 NPU IR 融合 pass 最好把 backend capability 作为输入，而不是事后才发现无法 codegen。
+
+## 与存储计划和运行时的交接
+
+图上合并成功后，融合结果还要能被实际调用。例如，一次融合需要更大的临时空间，后端就必须能描述所需 workspace，调用侧也要提供满足大小、对齐和生命周期要求的存储。若动态 shape 会改变所需空间，相关尺寸必须能在编译时表达或在运行时计算。
+
+同样，融合后的 shape、dtype、layout 和格式信息需要与新操作保持一致。可以在改写时局部更新，也可以使相关分析失效后重新推导；关键是后续 lowering 使用有效的信息，而非强制某一种更新策略。
+
+对于文中的 Ascend 示例，后端还要落实哪些中间值使用 GM、UB、L1、L0 等存储，以及如何组织搬运和计算依赖。通用图层识别了可融合子图，并不意味着已经完成这些安排。
+
+最终交接应能够说明：采用哪份后端实现、如何生成启动参数、输出和临时空间由谁管理，以及一次调用何时完成。若系统支持产物缓存，复用条件也应包含该实现依赖的目标与输入约束。此处解释的是后端约束的检查方向，具体 API 与实现链以固定项目源码为准。
+
+通用的编译、装载、调用与缓存关系见 [Lowering 与 Runtime 基础](/notes/compile/ai-basics/lowering_runtime)，本节在其基础上补充 NPU 交接要求。
 
 ## 检查项
 
