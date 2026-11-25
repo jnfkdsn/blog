@@ -82,6 +82,26 @@
   max-width: none;
 }
 
+/* Original technical figures often use transparent backgrounds and dark labels. */
+.vp-doc .source-figure {
+  background: #fff;
+  border: 1px solid #d8dee8;
+  border-radius: 6px;
+  padding: 12px;
+  margin: 20px 0;
+}
+
+.vp-doc .source-figure p {
+  margin: 0;
+}
+
+.vp-doc .source-figure img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
 /* ===== 代码块圆角 ===== */
 div[class*='language-'] {
   border-radius: 8px;
