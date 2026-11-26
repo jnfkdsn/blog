@@ -1,7 +1,7 @@
 ---
 order: 50
 title: Transform Dialect 与显式调度
-updated: 2026-10-04
+updated: 2026-11-24
 ---
 
 # Transform Dialect 与显式调度
@@ -21,9 +21,13 @@ Transform Dialect 用 MLIR 表达这份调度。它处理的对象仍然是原�
 
 算法 IR 常称 payload IR。它将来参与生成目标程序：里面的 `%x` 是程序的数组，`%a` 是计算中的数值。
 
-调度 IR 则在编译时由 Transform interpreter 执行。里面的 `%target` 关联到某些 Operation，不是数组中的元素，也不是目标程序运行时要传递的指针。完成调度后，算法 IR 已经改变；目标程序不需要运行这段 Transform 程序。
+Transform interpreter 在编译时执行调度 IR：`%target` 关联编译器中的 Operation，变换修改这些对象。完成后，新的算法 IR 继续进入目标编译。
 
-这层分离允许同一份算法配不同调度，但并不会免除合法性条件。若变换需要无依赖、特定迭代类型或尺寸保证，调度仍要满足这些条件。
+同一算法可以采用不同调度。每项变换都需要满足自己的依赖、迭代类型及尺寸条件。
+
+![Transform 句柄关联编译器对象，payload 值描述目标计算](./images/transform-payload.svg)
+
+图左的 handle 在编译时关联右侧的 Operation，虚线表示匹配或变换；右侧 `%x` 等值描述目标程序的数据流。下面继续解释 handle 的有效期。
 
 ## 2. 句柄与对象集合
 
@@ -36,7 +40,7 @@ Transform Dialect 用 MLIR 表达这份调度。它处理的对象仍然是原�
 
 `%root` 关联本次解释器处理的根操作；在本例里是模块。匹配在这个范围内寻找指定名字的操作，把找到的对象关联给 `%target`。
 
-一个 handle 可以关联零个、一个或多个对象；其类型不是元素数量的保证。我们的输入只有一个 generic，所以此时集合里只有它。若以后输入变成三个 generic，匹配可能得到三个候选：后续变换会怎样处理这组对象，要看相应操作的契约，不能默认“只选第一项”。
+Handle 可以关联零个、一个或多个对象。本例只有一个 generic，因此匹配集合包含一个对象；多个 generic 时，后续变换按自身契约处理这组目标。
 
 需要更精确地定位时，可以按操作名、属性、父子关系等进一步匹配或筛选。接口和扩展提供更多定位方式；最终目的始终是让“想优化的那段计算”与“拿到的对象集合”一致。
 
@@ -60,7 +64,7 @@ transform.structured.vectorize %tiled vector_sizes [4] : !transform.any_op
         %tiled ──→ 循环内部的小块 generic
 ```
 
-分块消费了旧 handle。这里的“消费”是 Transform 对映射生命周期的约定，不是在运行时销毁一个 Tensor。变换可能替换原操作、改变其嵌套关系，继续把旧对象当作可靠目标就会产生歧义，所以调用方应使用变换返回的 handle。
+分块消费旧 handle，并返回指向新结构的 handle。旧操作可能被替换或改变嵌套位置，因此继续调度时要使用更新后的映射。
 
 如果把向量化的 `%tiled` 错改成 `%target`，实际解释器报错：
 
@@ -69,23 +73,23 @@ error: op uses a handle invalidated by a previously executed transform op
 note: invalidated by this transform op that consumes its operand #0 ...
 ```
 
-错误定位到前一次分块，说明问题在调度的对象生命周期，而不是浮点加法不正确。
+诊断定位到此前的分块操作，说明使用了已失效的调度句柄。
 
 ## 4. 别名句柄与嵌套对象
 
-失效不只影响某个变量名。若两个 handle 指向同一个 payload 操作，消费其中一个后，另一个也不能假装指向一个独立副本。类似地，消费一个容器对象会影响关联其内部对象的旧 handle。
+若两个 handle 指向同一个 payload，消费其中一个也影响另一个；消费容器时，指向其内部对象的旧映射也可能失效。
 
-因此“我重新给它起一个 SSA 名字”不能修复失效。正确方式通常是使用变换返回的对象，或从仍有效的上层范围重新匹配当前 IR。并非每种变换都消费目标；Transform 通过效果描述区分查询、生成映射、修改 payload 和释放映射。
+继续操作时，可以使用变换返回的 handle，或从仍有效的上层范围重新匹配。Transform 效果描述分别记录查询、生成映射、修改 payload 和释放映射。
 
-`transform.readonly` 在 named sequence 参数上描述的是这个 handle 的使用/消费约定。它不是说整个 sequence 不能修改该范围内的计算：本例 `%root` 标记 readonly，仍然可以匹配其子对象并分块。真正被消费的是相应子对象的 handle。
+`transform.readonly` 约束 named sequence 参数 handle 的使用与消费。本例保留 `%root` 的映射，再匹配和消费其子对象 handle 来完成分块。
 
-解释器的 expensive checks 可以帮助捕获这些错误，但关闭检查并不会让失效句柄变合法。它是调度程序需要遵守的协议。
+Expensive checks 帮助发现失效句柄。调度程序始终需要按 handle 的有效期使用映射。
 
 ## 5. 失败传播与抑制
 
 变换可能不适用于某个对象。例如 `structured.vectorize` 接受 Linalg 操作，把 `scf.for` 交给它就不满足条件。这种“不适用”可能以 silenceable failure 返回；协议损坏或无法继续的错误则是 definite failure。
 
-二者不等于“警告”和“普通错误”：silenceable failure 只有被合适的外层操作显式处理时，才可以抑制。未处理而传播到最外层，仍会让解释失败。
+Silenceable failure 可以由支持处理它的外层操作显式抑制；若一直传播到最外层，解释执行仍会失败。
 
 实验专门按下面顺序执行：
 
@@ -99,9 +103,9 @@ note: invalidated by this transform op that consumes its operand #0 ...
 
 实际打印结果仍包含新 `scf.for` 和内部 generic，没有恢复成分块之前的程序。固定版本的 sequence 在 suppress 模式下抑制本次可抑制失败，然后继续执行后面的操作。
 
-这个例子说明两点。第一，**抑制不是事务回滚**，之前成功的修改会保留。第二，**抑制不修复失效映射**：第 3 步仍涉及消费 handle，后续不能随意使用指向循环内部的旧 handle。Definite failure 也不会因 suppress 而被忽略。
+Suppress 会保留此前成功的修改。第 3 步消费 handle 后，相关旧映射也按协议失效；后续需使用有效 handle。Definite failure 则继续向外传播。
 
-要实现“试一种调度，不适用就恢复并试另一种”，需要明确选择具有所需隔离/恢复语义的机制，或在可恢复的副本上尝试；不能仅把 sequence 模式换成 suppress。
+若要失败后恢复并尝试另一种调度，应选择具有恢复语义的机制，或在独立副本上尝试，确认成功后再采用结果。
 
 ## 6. 与 Pass、Pattern 和搜索的关系
 
@@ -116,7 +120,7 @@ note: invalidated by this transform op that consumes its operand #0 ...
 
 Transform interpreter 本身通常由 Pass 调用。已有变换通过 Transform 操作暴露出来；需要新动作时也可以写扩展，但仅使用已有动作不必先开发一套新框架。
 
-把 tile size 写成 4，只是明确记录了一种选择，不意味着 interpreter 已经自动搜索最优值。下篇会看到同样合法的向量计算也可能更慢；调度可复现是性能研究的起点，成本评估仍需要目标和测量。
+Tile size=4 是调度程序记录的一项选择。比较不同值需要结合目标成本或测量，下一篇将对照几种合法实现的实际运行时间。
 
 ## 7. 阅读检查与衔接
 
@@ -124,4 +128,4 @@ Transform interpreter 本身通常由 Pass 调用。已有变换通过 Transform
 2. 分块后使用另一个曾经指向原 generic 的 handle，能否绕过消费规则？
 3. sequence 抑制了第 3 步的失败，第 2 步已经生成的循环还在吗？第 4 步是否执行？
 
-继续读[调度选择与性能解释](./performance)。本文已实际验证成功调度、失效句柄、抑制后继续执行、传播失败及保留中间修改。版本依据：[Transform 设计文档](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/docs/Dialects/Transform.md)、[sequence 实现](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/lib/Dialect/Transform/IR/TransformOps.cpp)。可选 [15 实验](https://github.com/jnfkdsn/aicompiler/tree/main/llvm-mlir/15-vector-transform)会打印实际 IR 和诊断。
+继续读[调度选择与性能解释](./performance)。版本依据：[Transform 设计文档](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/docs/Dialects/Transform.md)与 [sequence 实现](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/lib/Dialect/Transform/IR/TransformOps.cpp)。[配套工程](https://github.com/jnfkdsn/aicompiler/tree/main/llvm-mlir/15-vector-transform)可以观察成功调度、句柄失效及失败后的 IR。

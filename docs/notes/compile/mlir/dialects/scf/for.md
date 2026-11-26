@@ -1,7 +1,7 @@
 ---
 order: 2
 title: SCF For：循环状态与结果
-updated: 2026-09-06
+updated: 2026-11-24
 tags: [mlir, scf, for, yield, ssa, control-flow]
 status: draft
 ---
@@ -125,7 +125,7 @@ module {
 | `%next` | 循环体内 addi 的 OpResult | 本轮计算出的新状态 |
 | `scf.yield %next` | 循环体 terminator 及其 operand | 把新状态交还循环结构 |
 
-`iter_args(%acc = %initial)` 中的等号用于声明“循环体参数及其初始绑定”，不是在循环外创建一个之后可以任意赋值的可变变量。
+`iter_args(%acc = %initial)` 声明循环体参数 `%acc`，并将 `%initial` 绑定为它在第一轮的值。
 
 这些名字的作用域也不同：`%initial` 定义在循环外，`%i`、`%acc`、`%next` 属于循环体，`%result` 是在循环结束之后使用的外层结果。
 
@@ -140,20 +140,13 @@ module {
 | 第 3 次 | 2 | 12 | 13 | 下一次迭代的 `%acc` |
 | 第 4 次 | 3 | 13 | 14 | 循环结束，成为 `%result` |
 
-这里有两条传递路径：
+![初值进入块参数，本轮计算出的 next 经 yield 交给下一轮的 acc 或最终 result，零轮时直接取初值](./images/for-carried.svg)
 
-```text
-索引：下界 → 本轮 %i → 按 step 更新 → 检查下一轮
-
-状态：%initial → 本轮 %acc → 计算 %next → scf.yield
-                         ↑                  │
-                         └── 若继续迭代 ────┤
-                                            └── 若结束 → %result
-```
+沿回到块参数的箭头看，第 1 轮交出的 11 是第 2 轮接收的值。第 4 轮之后，循环将 14 交给外层的 `%result`。
 
 索引更新由 for 自己规定，所以 `scf.yield` 只需要携带累加状态，不需要把下一轮 `%i` 一起传回。
 
-可以用下面的伪代码理解其执行协议。这不是 MLIR 语法，也不是要求编译器采用这种实现：
+用伪代码表示这个执行协议：
 
 ```text
 i = lower_bound
@@ -166,7 +159,7 @@ while i < upper_bound:
 for 的外部结果 = state
 ```
 
-## 6. yield 不是 Python 生成器，也不是退出函数
+## 6. yield 与父操作的传值约定
 
 SCF 中的 `yield` 是区域终结操作。它如何把值交给后续执行，要由所属的父 Operation 解释。
 
@@ -176,7 +169,7 @@ SCF 中的 `yield` 是区域终结操作。它如何把值交给后续执行，�
 | 无循环携带值的 `scf.for` | 空 yield，结束本轮循环体 |
 | 返回结果的 `scf.if` 分支 | 为这个 if 操作提供被选中分支的结果 |
 
-它不会创建 Python 风格的生成器，也不是让函数暂停、等待调用者下一次恢复。
+在这里，yield 结束本轮 body 的执行，将更新后的循环状态交给 for。
 
 `func.return %result` 则按照函数语义把结果交给函数调用方。它出现在循环之后；每次执行 `scf.yield` 不会立即让整个函数返回。
 
@@ -197,7 +190,7 @@ scf.for Operation
         └── scf.yield，operand 为 %next
 ```
 
-下方片段按通用打印形式写出上述结构，输入的定义省略。它展示的是同一个 for，不是另一种循环：
+同一个 for 的通用打印形式如下，片段省略了输入的定义：
 
 ```text
 %result = "scf.for"(%lb, %ub, %step, %initial) ({
@@ -207,7 +200,7 @@ scf.for Operation
 }) : (index, index, index, i32) -> i32
 ```
 
-末尾类型列表与四个 operand 对应；Region 中的两个参数，与四个 operand 的数量不相同。因为“怎样把操作输入变成本轮 Block 参数”由 for 的语义决定，不是简单逐项拷贝所有 operand。
+末尾类型列表对应四个 operand；Region 接收两个参数。for 使用上下界和步长控制迭代，把当前索引与当前累加值传给 body。
 
 这也解释了为什么循环在运行时不断产生不同的 `%acc` 内容，却仍符合 SSA：静态 IR 中只有一个 `%acc` Block Argument 定义，每次执行循环体时由循环协议进行绑定。
 
@@ -234,11 +227,11 @@ scf.for Operation
 
 ### 步长和范围
 
-本课使用同为 index 的下界、上界、正步长。上界是排他的。步长必须为正，不应把 step=0 当作合法的无限循环写法。某些约束需要结合运行时值保证，不是所有问题都能通过静态 verifier 检出。
+本例的下界、上界和步长都使用 index，上界为排他边界，步长要求为正。动态步长需要由调用约定或运行时检查保证有效。
 
 该版本也允许 signless integer 的 IV/边界/步长，在简洁语法中以 `: i32` 等标明。范围比较采用有符号语义；不要从较新网页直接搬入当前版本未提供的语法。IV 类型必须与三个控制 operand 一致，携带状态则可使用其他合法类型。
 
-在索引计算可表示且不发生溢出的前提下，若 lb < ub，迭代次数为 `ceil((ub-lb)/step)`；否则为 0。这是解释次数的数学公式，不是要求用固定位宽 IR 直接计算 `ub-lb+step-1`，因为这种实现还需处理溢出。
+在索引计算可表示且不溢出的前提下，lb < ub 时迭代次数为 `ceil((ub-lb)/step)`，否则为 0。将这个数学公式实现为固定位宽运算时，还需要处理减法、加法可能发生的溢出。
 
 携带值的静态类型在迭代间不变；若类型含动态维，运行时具体尺寸未必因此固定。尺寸不变需要另外的操作契约或分析依据。
 
@@ -292,7 +285,7 @@ module {
 }
 ```
 
-这个循环 body 中写了 addi，但运行时一次都不进入。canonicalization 可以把它化简为直接返回 initial。验证脚本检查了这个结构化简；它不是机器执行的数值测试。
+这个循环的 body 虽然包含 addi，但迭代次数为零。canonicalization 因此可以将它化简为直接返回 initial。
 
 下面故意 yield 一个 index，而循环状态/结果要求 i32：
 
@@ -311,7 +304,7 @@ module {
 }
 ```
 
-`scf.yield` 的局部 operand 确实是 index，但它不满足父 for 的传值契约。读错误应对照 init/body 参数/yield/result 四组类型，而不是随意修改某一个类型标注。
+这里 yield 提供 index，而父 for 要求另一种类型。检查错误时，需要对照 init、body 参数、yield 和 result，修复整条传值链上的类型关系。
 
 ## 11. Lower 到 CF 后，熟悉的跳转在哪里
 
@@ -353,7 +346,7 @@ module {
 
 这些 Block 处于同一个函数体 Region 中。SCF 将循环信息封装在一个 Operation 及其内部 Region 中，CF 则把判断与回边显式表达出来。
 
-原来的循环体只有一个 Block，却能够循环执行，是因为控制行为由 `scf.for` 定义。一个 Block 的静态存在，并不意味着运行时只能进入一次。
+`scf.for` 定义重复进入 body 的执行规则，因此同一个静态 Block 可以在运行时执行多轮。
 
 ## 12. 阅读这类操作的固定方法
 
@@ -366,7 +359,7 @@ module {
 5. 父 Operation 如何解释传出值：继续迭代、退出还是形成结果？
 6. 零次执行、类型不匹配、空分支等边界怎样处理？
 
-能够按执行表推演一个循环，并解释“初始值 → 本轮参数 → yield → 下一轮参数/最终结果”，就达到了本专题的阅读目标。正式编码和调试实验在阅读之后另行安排。
+用“初始值 → 本轮参数 → yield → 下一轮参数或最终结果”可以追踪整个循环。下一篇继续看 [scf.while](./while) 如何分别表达循环条件与状态更新。
 
 ## 源码与验证依据
 

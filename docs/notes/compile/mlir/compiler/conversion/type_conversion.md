@@ -1,7 +1,7 @@
 ---
 order: 2
 title: 类型转换与函数签名
-updated: 2026-10-02
+updated: 2026-11-24
 ---
 
 # 类型转换与函数签名
@@ -26,7 +26,7 @@ module {
 
 `my.limit` 的输入仍是 i32，bounds 属性规定怎样限制输入，结果类型向使用者承诺同一个区间。它的 verifier 要求属性与类型中的上下界一致。
 
-这三者并不重复承担同一工作：输入是运行时数据，属性是计算参数，类型是结果契约。对于输入 12，计算应该返回 7；对于 -9，应该返回 -4。这些是根据源语义得到的预期，解析这段 IR 时并没有执行函数。
+输入提供运行时数据，属性指定计算参数，类型声明结果契约。按源语义，输入 12 应返回 7，输入 -9 应返回 -4；这些结果在函数执行时产生。
 
 目标希望用 i32 保存同一个数值。完整输出应是：
 
@@ -69,11 +69,17 @@ arith.minsi → %v : i32 → func.return
 
 ### 2.2 移除类型信息的语义条件
 
-将 `!my.range<-4,7>` 表示成 i32，并不等于证明所有 i32 都满足这个范围。我们依赖的是原来合法程序的契约，以及仍被保留的 clamp 计算。
+range→i32 改变结果的表示。区间约束继续由源程序的输入契约和转换后保留的 clamp 计算保证。
 
-对本例的返回值，max/min 直接产生区间内的结果，所以移除类型标记后，数值仍然相同。若源函数的参数本来是 range，降低后的 i32 参数则需要调用方继续遵守原输入契约；类型变宽不能自动授权传入任意数值。
+本例的 max/min 产生区间内的值，因此降低类型后仍得到相同结果。若 range 出现在源函数参数中，则调用方需要继续满足原区间前提。
 
 这也是类型转换的语义职责：决定用什么表示保存原来的值，并说明原有保证由哪里维持。TypeConverter 可以记录这种设计，但不会替作者证明它正确。
+
+![类型转换需要同时处理产生值与使用值的位置](./images/type-boundaries.svg)
+
+对照图同时展开三个必须一致的位置。横向箭头表示对应位置的改写，纵向位置表示同一条结果使用链；它没有规定三个 Pattern 必须按从上到下的顺序执行。
+
+`TypeConverter` 回答目标类型，操作 Pattern 创建计算，函数与 return 的 Pattern 则改变接口和使用位置。少处理其中一端，就可能留下类型不一致的边界。
 
 ## 3. TypeConverter 与类型映射
 
@@ -98,13 +104,13 @@ struct RangeTypeConverter : TypeConverter {
 };
 ```
 
-这段代码处理的是 `Type`，不是某个具体 Value。给它 range 类型，它返回一个 i32 类型对象；不会创建 max/min，不会遍历所有使用者，也不会修改整份 IR。
+这段回调输入一个 `Type`，返回对应的目标 `Type`：range 映射为 i32。操作、参数及使用关系的实际改写由使用此映射的转换规则完成。
 
 第一条回调是通用的恒等映射，第二条是 range 的特殊处理。固定版本按后注册的转换规则优先尝试，所以特殊处理放在后面。若先用通用规则截获了所有类型，range 就可能被错误地认定为无需转换。
 
 对于这个 converter，`isLegal(i32)` 为真，因为 i32 映射到自己；`isLegal(range)` 为假，因为 range 要改成 i32。这里“类型合法”是相对于这套映射而言，不能与源类型自身是否可构造混为一谈。
 
-当前恒等映射只表示本例未改变其他类型，不等于递归重写任意容器内部的 range。若以后让 tensor 或 tuple 包含这种类型，需要明确设计它们的转换规则。
+通用 identity 回调原样返回其他类型。若 tensor 或 tuple 内部也包含 range，需要为这些容器补充相应的转换规则。
 
 ## 4. 操作规则怎样使用新表示
 
@@ -136,7 +142,7 @@ patterns.add<ConvertLimit>(converter, context);
 
 这样转换框架知道它期待的输入类型。本例的 input 原本就是 i32，因此 `adaptor.getInput()` 的类型保持 i32。对于更一般的消费者，原 operand 可能引用旧类型值，adaptor 则提供按这条规则所用 converter 准备的输入。
 
-最后的替换不是简单调用普通 RAUW，把一个 i32 塞给仍要求 range 的所有使用者。转换框架记录旧结果与替代值的对应，并协调其他规则对使用者的处理；必要的类型衔接在下一章展开。这里先让所有相关使用者一起进入新表示。
+框架记录旧 range 结果与新 i32 的对应，再把新值提供给消费者的转换规则。本例让相关使用者一起转到新表示；需要暂时保留旧消费者时，则用下一章的类型衔接机制。
 
 ## 5. 函数签名与 return 的转换
 
@@ -161,7 +167,7 @@ target.addDynamicallyLegalOp<func::ReturnOp>([&](func::ReturnOp op) {
 - 函数 Region 中各 Block 的参数也各自带类型，`isLegal(&op.getBody())` 检查这些参数。
 - return 的操作数是实际返回的 Value，另一条回调检查这些值的类型。
 
-函数上的检查并没有递归验证所有内部操作的目标合法性；内部 limit、return 等仍按各自规则处理。不能只检查 func 自身的 operand/result 数量，因为函数签名不是以普通 OpResult 列表保存的。
+函数签名保存在 FunctionType 中，需要专门检查；函数体内的 limit、return 等操作再按各自规则处理。两层检查共同保证转换后的类型一致。
 
 ### 5.2 复用已有边界规则
 
@@ -190,7 +196,7 @@ populateReturnOpTypeConversionPattern(patterns, converter);
 
 本例结束时，函数不再含 range 类型或 limit 操作，也没有保留新旧类型之间的桥接。配套程序对这种整体转换即使不注册 materialization 回调也能成功，因为没有需要继续接收旧表示的使用者。
 
-这不是所有类型转换都不需要桥接。只要决定保留旧函数接口、旧消费者或尚未转换的区域，前面那条使用链就会跨越两种表示。下一章只改变这个条件，观察框架如何处理。
+保留旧接口、旧消费者或尚未转换的区域时，使用链会跨越新旧两种表示。下一章通过保留旧函数接口来展示这类衔接。
 
 检查结果时可以依次问：
 
@@ -211,4 +217,4 @@ populateReturnOpTypeConversionPattern(patterns, converter);
 
 [类型转换工程](https://github.com/jnfkdsn/aicompiler/tree/main/llvm-mlir/08-type-conversion)复用已有 My dialect，提供完整 Pass、源 IR、输出和检查。本章实际输出来自固定的 LLVM 20.1.8 工具；语义推演与目标程序执行分别对待。
 
-精确接口见固定版本 [DialectConversion.h](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/include/mlir/Transforms/DialectConversion.h) 的 TypeConverter 与函数签名转换入口，以及 [FuncConversions.cpp](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/lib/Dialect/Func/Transforms/FuncConversions.cpp) 的返回值规则。不要求为理解本章通读所有生成代码。
+接口与实现见 LLVM 20.1.8 的 [DialectConversion.h](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/include/mlir/Transforms/DialectConversion.h) 和 [FuncConversions.cpp](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/lib/Dialect/Func/Transforms/FuncConversions.cpp)，可分别查阅 TypeConverter、函数签名转换和 return 转换。

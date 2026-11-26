@@ -1,7 +1,7 @@
 ---
 order: 2
 title: One-Shot Bufferization 的决策
-updated: 2026-10-04
+updated: 2026-11-24
 ---
 
 # One-Shot Bufferization 的决策
@@ -20,9 +20,23 @@ One-Shot Bufferization 先分析张量 use-def 关系，为操作的 tensor oper
 
 `%t` 是 destination，`%u` 是围绕它构造的新结果。因此分析有一个自然的候选：让 `%u` 复用 `%t` 的 buffer。
 
-这连接了 [DPS](../../dialects/linalg/destination_style) 的意义。Destination 并没有事先要求一定原地修改；它给出结果与哪个输入存储候选相关。对这个操作，分析主要在“复用 destination”和“另行分配”之间选择，而不是扫描全函数的每一块空闲内存，寻找全局最优安排。
+这正是 [DPS](../../dialects/linalg/destination_style) 为分析提供的信息：先指定一个可考虑复用的输入，再检查复用是否安全。对于 `tensor.insert`，通过检查就沿用 destination 的 buffer；存在冲突时，则为结果另行分配存储。
 
 所以，同样的数学计算，IR 是否提供合适的 destination，会影响这一步容易得到什么实现。后续 tiling/fusion 的结果是否形成清晰的数据流链，也会影响复用机会。
+
+<div style="background: white; padding: 0.6rem; border-radius: 6px;">
+
+<div class="source-figure">
+
+![tensor.insert 的结果、目标操作数以及两者可能对应的缓冲区](../../images/llvm/bufferization_tensor_insert_dst.svg)
+
+</div>
+
+</div>
+
+图源：[LLVM 20.1.8：Bufferization 的 Destination-Passing Style](https://mlir.llvm.org/docs/Bufferization/#destination-passing-style)。
+
+官方图用 `%r` 标结果，本文用 `%u`。先找 `into` 后面的 `%t`，再看结果能否沿用它的 buffer。如果写入会破坏后续需要的旧值，结果就要另找空间。
 
 ## 2. 读写冲突的具体推导
 
@@ -35,11 +49,11 @@ One-Shot Bufferization 先分析张量 use-def 关系，为操作的 tensor oper
 | extract `%t[0]` | 读取旧值 10 | 从 A[0] 读出 99，冲突 |
 | extract `%u[0]` | 读取新值 99 | 从 A[0] 读出 99，正确 |
 
-最后一行虽然正确，也不能抵消第三行的错误。这是一次 read-after-write 冲突：候选写入先发生，随后需要旧内容的读取被破坏。
+冲突发生在第三行：写入 99 后，原本应该读到 10 的操作也读到了 99。这是分析要避免的 read-after-write 冲突。
 
-分析并不是只数“这个 Value 是否有两个 use”。第二个 use 可能只查询形状，也可能在写入之前已经读出标量；它未必与写入冲突。实际判断还依赖读写效果、别名关系、控制流位置和相应操作提供的事实。反过来，旧值也可能先经过 slice，再被读取，不能只检查 destination 的直接使用者。
+判断冲突需要知道每个 use 做什么、何时执行、访问哪片存储。查询形状可以与元素更新共存；写入之前已经读出的标量也可以继续使用。旧值还可能经过 slice 才被读取，因此分析需要沿别名关系追踪到这些间接使用者。
 
-对直线代码，一个简单的无冲突变体是先把旧值提取为标量，再进行更新：已经取出的标量不依赖旧 buffer 后续保持不变。这个变体有助于理解条件，但不代表分析器会在所有复杂循环和索引情况下证明所有理论上安全的复用。
+例如，在直线代码中先提取旧值、再执行 insert，就能保留所需的旧标量并复用 buffer。遇到复杂循环或索引关系时，分析器需要更多事实才能作出同样的判断；信息不足时会选择独立存储。
 
 ## 3. 分析输出中的 Operand 决策
 
@@ -60,9 +74,9 @@ mlir-opt preserve.mlir \
 {__inplace_operands_attr__ = ["none", "true", "none"]}
 ```
 
-三个条目按 operands 排列：插入的标量、destination、索引。只有中间的 `%t` 是需要本次存储决策的 tensor operand。因此 `false` 表示 destination 不能原地使用，不是“这整个操作所有输入都必须复制”；`none` 也不是一次失败。
+三个条目依次对应插入的标量、destination 和索引。中间的 tensor operand 参与存储决策：`true` 表示可以原地使用，`false` 表示需要独立存储。两侧的标量与索引用 `none` 标记，表示它们无需这项决策。
 
-工具还为冲突关联定义、写入和读取，便于定位是哪一条旧值读取阻止了复用。这些带双下划线的属性是分析调试输出，不是操作的算法语义，不应写进正常输入来命令分析器强行原地执行。
+工具还会关联冲突中的定义、写入和读取，帮助定位阻止复用的那条旧值读取。带双下划线的属性由分析器生成，用于展示判断结果；调整复用行为，需要修改产生冲突的读写关系或相应接口信息。
 
 ## 4. 可写性与值依赖是两种条件
 
@@ -84,7 +98,7 @@ module {
 
 这个函数仍然返回 99，但 One-Shot 不允许对输入存储生成写入。结果采用新分配，复制旧内容后再更新；分析输出会标记来源不可写。
 
-这里的 readonly 是本函数边界对 bufferization 的约束。输入在运行时可能是普通可写内存，但编译器不能据此自行违反边界契约。与之相反，`writable` 只提供写入许可，不能覆盖旧值冲突检查：preserve 例子虽然可写，仍然不能直接修改旧值所需的 buffer。
+是否允许写入，由这里的函数边界信息决定。即使运行时传入普通可写内存，缺少 `writable` 时，One-Shot 仍按只读来源处理。加上 `writable` 后，分析还要检查旧值读取：preserve 例子具有写入许可，却仍需保留旧内容。
 
 因此，在排查额外复制时，至少先区分：**候选存储不允许写入，还是写入会破坏所需的值？** 两种原因需要调整的条件不同。
 
@@ -131,13 +145,13 @@ module {
 结果完整覆盖 → 新存储不需要继承旧内容
 ```
 
-而 tensor.insert 的未更新位置需要继承内容，所以相同的独立存储决定后面会跟随复制。这是为什么 bufferization 必须了解每个操作如何读取和写入，而不能只根据输入输出类型作决定。
+`tensor.insert` 的未更新位置需要继承旧内容，因此还要复制。两种操作的输入输出类型可以相同，读写行为却决定了不同的初始化方式。
 
 ## 6. Alias 与 Equivalent 的作用
 
 分析中需要追踪“哪些张量未来可能共享存储”。其中共享一部分存储与对应同一个完整 buffer，是不同强度的事实。
 
-对于 slice，结果可指向源 buffer 的一个子视图：两者 alias，但形状、offset 或覆盖范围不同，不能简单当成同一完整视图。对成功原地处理的 insert，destination 与结果则可具有等价的 buffer 关系。这里的 **Equivalent 指 buffer 关系，不是说更新前后张量数值相等**。
+对于 slice，结果可指向源 buffer 的一个子视图：两者 alias，访问范围由各自的形状和 offset 决定。对成功原地处理的 insert，destination 与结果可对应同一个完整 buffer，具有 **Equivalent** 关系。这里描述的是存储关系；更新前后的张量仍分别表示旧值和新值。
 
 这种区别可以在局部填充中直接看到：
 
@@ -183,11 +197,11 @@ module {
 
 最后只剩一个 subview、在窗口上的 fill，以及两次读取。原数组 `[1,2]` 变成 99，窗口外的 `[0,0]` 保持原内容。这里没有把整个 `4×4` 数组复制一遍。
 
-这个最终结果是几个 passes 合作形成的：One-Shot 选择共享存储并改写操作，CSE/canonicalize 清理冗余。固定版本的原始 One-Shot 输出仍可能包含等价 subview 之间的 copy，不能将所有清理效果都归到分析器自身。
+这个结果分两步形成：One-Shot 选择共享存储并改写操作；CSE/canonicalize 再合并等价 subview、清理自复制。逐阶段打印 IR，可以看到这些清理分别发生在哪里。
 
 ## 7. 操作接口与改写阶段
 
-分析器不能从名字猜出 `my.some_op` 是否会读取 destination、是否完整覆盖结果、返回值是否与输入关联。标准操作通过 `BufferizableOpInterface` 提供这些事实及具体改写方法。
+读写和存储关系由操作的 `BufferizableOpInterface` 实现提供。分析器查询接口，得知操作是否读取 destination、是否写入，以及结果可能与哪些输入共享存储；改写阶段再调用接口提供的 bufferization 方法。自定义操作也通过这套接口接入分析。
 
 对于当前例子，消费关系可以理解成：
 
@@ -201,17 +215,17 @@ One-Shot 分析：沿 use-def 与控制流检查冲突，决定原地与否
 操作的 bufferize 实现：产生 store、load、subview 或 buffer 形式计算
 ```
 
-因此，`tensor.insert` 的最终改写函数可以很短：取得已经准备好的 destination buffer，创建 store，再把原结果替换为这个 buffer。它无需在这个局部函数里重新分析整段程序。反之，仅实现一个“总是 store 输入”的 Pattern，缺少前面的契约与分析，就不能保证 Tensor 语义。
+因此，`tensor.insert` 的最终改写函数可以很短：取得已经准备好的 destination buffer，创建 store，再把原结果替换为这个 buffer。保护旧值的工作已经在前面的分析和 buffer 准备阶段完成；直接向原输入生成 store 会跳过这些检查，在 preserve 例子中破坏旧值读取。
 
-许多标准操作的实现使用外部 Interface 模型，位于方言的 Transforms 库中。自己构建工具时，除了注册方言，还要注册需要的模型；否则“工具能解析这个操作”并不意味着 One-Shot 能处理它。遇到不支持的 tensor 操作，默认转换会失败；`allow-unknown-ops` 可以保留混合边界，但剩余张量仍需安排后续处理，不能直接视为完整 bufferization 已完成。
+许多标准操作的接口实现采用外部模型，位于方言的 Transforms 库中。构建工具时，方言注册提供解析等基本能力，外部模型注册则提供 One-Shot 所需的分析和改写方法。遇到缺少支持的 tensor 操作，默认转换会失败；启用 `allow-unknown-ops` 后，可以暂时保留这些操作与 tensor/buffer 边界，交给后续转换继续处理。
 
-本章建立的是消费者视角。实现自定义接口时再沿一个具体操作补齐这些方法，不需要现在背诵整套接口重载。
+自定义操作的接入过程见[自定义操作的 Bufferization](./custom_operations)，其中会把这些查询与改写方法放进一个完整实现。
 
-## 8. 决策能力的边界
+## 8. 分析顺序与额外复制
 
-One-Shot 按启发式顺序分析，增量建立 alias/equivalence 关系，并作出局部的原地决定。它追求减少分配和复制，但不承诺全局最优的内存计划。操作接口提供得不够精确、数据流有复杂分支，或者布局与函数边界约束变化，都可能带来保守结果或额外搬运。
+One-Shot 按启发式顺序分析，逐步建立 alias/equivalence 关系，并作出局部的原地决定。前面选定的共享关系会影响后面的冲突判断，因此分析顺序可能影响最终分配和复制的数量。接口信息的精度、分支结构、布局与函数边界约束，也会影响可用的复用机会。
 
-本章的调试顺序可以迁移到更大程序：先找到那次额外分配或复制，再确认来源是否可写、哪个 operand 被判为非原地、哪条读取构成冲突，最后检查能否通过合法的数据流或 destination 调整改善。不要先删掉 copy 再猜它是否多余。
+排查额外分配或复制时，可以依次检查来源是否可写、哪个 operand 被判为非原地、哪条读取构成冲突。找到原因后，再调整数据流或 destination，并检查修改后的读写是否仍保留所需的张量值。
 
 即便所有复用决定都正确，临时分配仍要释放。下一章[函数边界、所有权与释放](./ownership)继续处理这一部分。
 
@@ -226,4 +240,8 @@ One-Shot 按启发式顺序分析，增量建立 alias/equivalence 关系，并�
 
 输入、分析标记与实际输出按 LLVM 20.1.8 验证。实现依据见[One-Shot 分析](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/lib/Dialect/Bufferization/Transforms/OneShotAnalysis.cpp)、[Tensor 的外部接口模型](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/lib/Dialect/Tensor/Transforms/BufferizableOpInterfaceImpl.cpp)以及[接口契约](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/include/mlir/Dialect/Bufferization/IR/BufferizableOpInterface.td)。
 
-可选实践：[冲突、不可写来源、完整覆盖与窗口更新](https://github.com/jnfkdsn/aicompiler/tree/main/llvm-mlir/10-memory-bufferization)。自定义接口工程仍作为本模块按需扩展。
+配套实验：[冲突、不可写来源、完整覆盖与窗口更新](https://github.com/jnfkdsn/aicompiler/tree/main/llvm-mlir/10-memory-bufferization)。
+
+## 图片来源与许可
+
+- **tensor.insert 与目标缓冲区图**：来自 [LLVM Project 20.1.8](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/docs/includes/img/bufferization_tensor_insert_dst.svg)，采用 [Apache-2.0 WITH LLVM-exception](/licenses/llvm-20.1.8.txt)。原图未修改。

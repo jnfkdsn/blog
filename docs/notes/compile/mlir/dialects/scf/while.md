@@ -1,7 +1,7 @@
 ---
 order: 3
 title: SCF While：两区域循环协议
-updated: 2026-09-06
+updated: 2026-11-24
 ---
 
 # SCF While：两区域循环协议
@@ -32,6 +32,10 @@ while operands / initial values
 condition 的第一个 operand 是控制条件；后面的 operands 才是传递的数据。条件为 true，它们传给 after；为 false，它们直接成为整个 while 的结果。after 的 yield 总是传回 before，不直接成为 while result。
 
 因此不能沿用“for 最后一轮 yield 就是最终结果”的表述来解释 while。while 的退出值由最后一次 condition 提供。
+
+![scf.while 的两条传值路径](./images/while-values.svg)
+
+顺着图读一次循环：输入先进入 before，condition 为真才进入 after；after 的 yield 再把值送回 before。condition 为假时，传出的值直接成为 while 结果。两套传值位置分别形成类型约束，这也是后文区分 before 与 after 参数的原因。
 
 ## 2. 普通 while：先判断再执行主体
 
@@ -103,7 +107,7 @@ module {
 }
 ```
 
-如果把 after 的 yield 改成 i32，它虽然与 after 参数相同，却不符合要回到的 before 参数类型。检查类型时必须顺着控制去向看接收方，不能只比较附近的声明。
+after 的 yield 回到 before，因此类型应与 before 参数匹配。若改为 i32，就与这条回边的接收方不符。
 
 这种机制也允许 before 同时计算条件与 after 要使用的中间量，以参数传过去，避免在 after 重算。两个 Region 是兄弟区域，不能直接引用另一边内部定义的 SSA Value 绕过协议。
 
@@ -156,6 +160,6 @@ before 执行过，condition 的 trailing operands 成为结果；yield 回到 b
 
 </details>
 
-依据：[SCFOps.td](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/include/mlir/Dialect/SCF/IR/SCFOps.td) 的 WhileOp/ConditionOp/YieldOp；[SCF.cpp](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/lib/Dialect/SCF/IR/SCF.cpp) 的 WhileOp verifier；[SCFToControlFlow.cpp](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/lib/Conversion/SCFToControlFlow/SCFToControlFlow.cpp)。三个模块参与 P/G/L，推演表未作为机器执行报告。
+依据：[SCFOps.td](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/include/mlir/Dialect/SCF/IR/SCFOps.td) 的 WhileOp/ConditionOp/YieldOp；[SCF.cpp](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/lib/Dialect/SCF/IR/SCF.cpp) 的 WhileOp verifier；[SCFToControlFlow.cpp](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/lib/Conversion/SCFToControlFlow/SCFToControlFlow.cpp)。
 
 继续阅读：[内存、效果与优化边界](../../core/effects)，然后进入[贯通教程](../../tutorials/reading_ir)。

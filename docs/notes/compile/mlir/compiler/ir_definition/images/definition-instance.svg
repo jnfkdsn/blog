@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="620" height="218" viewBox="0 0 620 218" role="img" aria-labelledby="title desc">
+<title id="title">从声明到可读取的操作</title><desc id="desc">构建工具时编译操作定义，解析输入时按注册信息创建操作实例。</desc>
+<defs><marker id="tip" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M1 1 L8 4.5 L1 8" fill="none" stroke="#465d71" stroke-width="1.7"/></marker></defs>
+<rect x="1" y="1" width="618" height="216" rx="8" fill="#fafbfd" stroke="#ccd5df"/>
+<g font-family="system-ui, sans-serif" fill="#182c42">
+<text x="18" y="29" font-size="18" text-anchor="start" font-weight="600">构建 my-opt</text>
+<rect x="16" y="42" width="132" height="42" rx="5" fill="#e3edf8" stroke="#8293a3"/>
+<text x="82.0" y="69.0" font-size="17" text-anchor="middle" font-weight="400">MyOps.td</text>
+<path d="M148 62 H184" fill="none" stroke="#465d71" stroke-width="1.8" marker-end="url(#tip)"/>
+<rect x="187" y="42" width="165" height="42" rx="5" fill="#e3edf8" stroke="#8293a3"/>
+<text x="269.5" y="69.0" font-size="17" text-anchor="middle" font-weight="400">生成的 C++</text>
+<path d="M352 62 H393" fill="none" stroke="#465d71" stroke-width="1.8" marker-end="url(#tip)"/>
+<rect x="396" y="42" width="204" height="42" rx="5" fill="#daf0e7" stroke="#8293a3"/>
+<text x="498.0" y="69.0" font-size="17" text-anchor="middle" font-weight="400">编入 my-opt</text>
+<text x="18" y="127" font-size="18" text-anchor="start" font-weight="600">工具读入程序</text>
+<rect x="16" y="141" width="132" height="42" rx="5" fill="#e3edf8" stroke="#8293a3"/>
+<text x="82.0" y="168.0" font-size="17" text-anchor="middle" font-weight="400">my.add 文本</text>
+<path d="M148 162 H184" fill="none" stroke="#465d71" stroke-width="1.8" marker-end="url(#tip)"/>
+<rect x="187" y="141" width="208" height="42" rx="5" fill="#fff0d8" stroke="#8293a3"/>
+<text x="291.0" y="168.0" font-size="17" text-anchor="middle" font-weight="400">查注册信息，解析</text>
+<path d="M395 162 H429" fill="none" stroke="#465d71" stroke-width="1.8" marker-end="url(#tip)"/>
+<rect x="432" y="141" width="168" height="42" rx="5" fill="#daf0e7" stroke="#8293a3"/>
+<text x="516.0" y="168.0" font-size="17" text-anchor="middle" font-weight="400">一个 Operation</text>
+<path d="M498 84 V109 H335 V138" fill="none" stroke="#465d71" stroke-width="1.8" marker-end="url(#tip)"/>
+</g></svg>

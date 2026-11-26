@@ -1,7 +1,7 @@
 ---
 order: 2
 title: Value、SSA 与支配关系
-updated: 2026-09-06
+updated: 2026-11-24
 ---
 
 # Value、SSA 与支配关系
@@ -18,7 +18,7 @@ MLIR 的一个 SSA Value 有且只有一个定义来源：某个 Operation 的�
 | BlockArgument | 某个 Block | 函数入口的 `%x`、循环体的 `%iv` |
 | OpOperand | 使用者 Operation 的某个输入位置 | addi 的第一个或第二个输入槽 |
 
-operand 不是第三种 Value 定义来源。它是一个引用已有 Value 的位置。一个 `%x` 被 `arith.addi %x, %x` 使用两次，就有两个 use，但只有一个使用者 Operation。
+operand 是操作中引用已有 Value 的位置。`arith.addi %x, %x` 的两个 operand 都指向 `%x`，因此产生两个 use，使用者 Operation 则只有一个。
 
 完整模块：
 
@@ -34,15 +34,19 @@ module {
 
 `%x` 是入口 BlockArgument，add 操作对它有两个 OpOperand；`%y` 是 add 的 OpResult，return 对它有一个 use。`func.func` 自身没有因为签名里的 `-> i32` 而产生 `%y`：函数签名描述调用，`%y` 在函数体内定义。
 
-`%x` 是文本名，Value 的身份由 IR 对象确定。重新打印后名字可能变成 `%arg0`；只要定义和引用关系不变，SSA 图就没变。多结果操作也可以使用 `%r:2 = ...`，然后以 `%r#0`、`%r#1` 分别引用两个不同的结果；`%r` 不是一个隐含 tuple 值。
+`%x` 是文本名，Value 的身份由 IR 对象确定。重新打印成 `%arg0` 后，定义和引用关系仍保持原样。多结果操作可写为 `%r:2 = ...`，再以 `%r#0`、`%r#1` 分别引用其两个结果。
 
 ## 2. SSA 限制的是静态定义
 
 普通程序的 `x = x + 1` 混合了“读取旧值”和“更新变量”。SSA 把数据依赖显式化：某个定义提供旧值，另一个定义产生新值，后续使用指向新值。
 
-“Static Single Assignment”中的 static 很关键：一段循环体在 IR 中只有一个加法节点，运行时可以执行多次。每次进入 Block 时会绑定参数、执行操作；这不要求在编译时复制无限多个 `%next` 定义。
+Static Single Assignment 描述静态 IR 中的定义关系。循环体可以只有一个加法节点，运行时每次进入 Block 都重新绑定参数并执行这条加法，得到当次迭代的结果。
 
-SSA 也不意味着 IR 不允许修改。编译器可以把一个 use 改为引用另一个 Value，但修改后的 IR 必须继续满足类型、支配和作用域等约束。目标程序中的 SSA 语义与编译器编辑 IR 对象是两个层次。
+编译器编辑 IR 时，可以让一个 use 改为引用另一个 Value。修改后的结构需要继续满足类型、支配和作用域约束，从而保持合法的 SSA 关系。
+
+![SSA 的合流值由实际进入的控制流边提供](./images/ssa-join.svg)
+
+图中 `%x` 定义在两条分支之前，两个分支各产生自己的值，再通过进入 join 的边传给 `%v`。箭头是控制流与沿边传值；它与 Operation 包含 Region 的容器树是不同关系。
 
 ## 3. 支配保证每次使用前都有定义
 
@@ -92,7 +96,7 @@ module {
 
 `^join(%selected: i32)` 定义一个新 BlockArgument。沿 left 的边进入时绑定 `%inc`，沿 right 的边进入时绑定 `%x`。`%selected` 的定义始终存在于 join 入口，具体取得哪个运行时值由实际前驱决定。
 
-它承担传统 SSA 中 phi 合流的角色，但 MLIR 把“目标需要几个值”放在 Block 参数上，把“这条边传什么”放在 branch operand 上。不要在 MLIR Block 的开头再寻找一个必然存在的 `phi` Operation。
+这承担了传统 SSA 中 `phi` 合流的角色：Block 参数声明目标需要的值，branch operands 提供当前这条边传入的值。
 
 一条分支必须给目标参数按位置提供类型相容且满足该操作约束的实参。这里 `cf.br` 要求对应类型相同；MLIR 不会自动插入整数转换。
 
@@ -111,13 +115,13 @@ entry ── initial ──→ header(%state)
 header 条件假 ──→ exit：使用最后一轮的 %state
 ```
 
-`%state` 是一个静态 BlockArgument 定义。第一次进入 header 来自 entry，后续进入来自回边。不是对同一个 OpResult 反复赋值。
+`%state` 是 header 的 BlockArgument。第一次进入时接收 entry 传来的值，之后每次沿回边进入时接收本轮更新的值。
 
 函数的入口 Block 不能成为该 Region 内 branch 的 successor，因此一般另建 header 承接回边。[CF 章节](../dialects/cf)给出完整循环；[SCF for](../dialects/scf/for)把这个协议编码在一个结构化 Operation 中。
 
 ## 6. 支配还必须穿过嵌套层级
 
-外层值能否用于嵌套 Region，不能只看名字是否可见。一般要先检查：拥有该 Region 的 Operation 若直接使用这个值是否合法；然后再检查是否存在隔离或额外约束。
+检查外层值能否用于嵌套 Region，可以先判断父 Operation 能否在该位置使用此值，再检查 Region 的隔离和额外约束。
 
 下面 `%one` 可以被 if 的两个区域使用，两个分支的局部结果则经 `scf.yield` 交给 if：
 
@@ -142,24 +146,24 @@ module {
 
 1. 外层 `%one` 在 if 之前定义，支配 if；if 允许捕获这样的值。
 2. `%a`、`%b` 各自在自己的 Region 内定义，不能直接在 if 外使用，也不能横跨到另一个分支使用。
-3. `%chosen` 是 if 的结果，在 if 执行之后使用；它不是把 `%a` 的名字搬到了外层。
+3. `%chosen` 是 if 的结果，由实际执行分支的 yield 提供，供 if 之后的操作使用。
 4. 不能在 if 自身内部引用尚未产生的 `%chosen`，期望得到某种隐式递归状态；循环状态需要相应 Block 参数协议。
 
 `IsolatedFromAbove` 会进一步禁止从拥有该 trait 的 Op 外部捕获 SSA 值，即使普通层次支配看起来允许。`func.func` 是常见例子；[符号与作用域](./symbols_scopes)解释隔离后如何引用其他函数。
 
 ## 7. Graph Region 的适用边界
 
-以上“定义必须先于使用”的 CFG 规则不能原样套到 Graph Region。在 LLVM 20.1.8 的 Graph Region 内，同层 OpResult 的作用域允许表达无顺序甚至循环依赖的图。仍必须有唯一 Value 定义和类型，仍受层次作用域与具体操作约束。
+Graph Region 使用另一套作用域规则。在 LLVM 20.1.8 中，同层 OpResult 可以表达无顺序甚至循环依赖的图，同时仍需要唯一的 Value 定义、正确类型，并满足层次作用域及具体操作约束。
 
-这不是允许在 `func.func` 中随意前向使用 `%value` 的理由。先确认 RegionKind，再判断支配；不能因为 parser 暂时解析到了一个名字，就断言最终 verifier 应当接受。
+因此应先确认 RegionKind，再判断引用是否合法。`func.func` 的函数体使用 SSACFG 规则，verifier 会继续检查其中的支配关系。
 
 ## 8. use-def 对编译器变换的意义
 
-要把 `%y = addi %x, 0` 化简为 `%x`，真正需要处理的是 `%y` 的所有使用，而不是修改 `%y` 的字符串名字。
+把 `%y = addi %x, 0` 化简为 `%x`，需要将 `%y` 的所有使用改为引用 `%x`，随后删除失去用途的加法。
 
 概念步骤是：证明操作语义允许替换 → 确认替代 Value 的类型和支配有效 → 将相关 uses 指向 `%x` → 在安全条件下删除旧操作。某些变换还要维护符号、效果和分析缓存。
 
-源码中的 `Value::getDefiningOp()` 只对 OpResult 返回定义 Operation；BlockArgument 没有这种定义 Op。`Value::getUses()` 遍历使用位置，`getUsers()` 遍历使用者，后者不能被想当然地视为无重复的集合。`replaceAllUsesWith` 负责引用替换，但它本身不会替你证明变换语义正确。实现 Pattern 时还需要遵守 rewriter 的通知与修改协议，后续再展开。
+`Value::getDefiningOp()` 对 OpResult 返回定义 Operation，对 BlockArgument 则返回空。`getUses()` 遍历使用位置，`getUsers()` 遍历对应使用者，同一个 Operation 可能出现多次。`replaceAllUsesWith` 用于转接引用；调用者负责确认替换的语义与类型，并在 Pattern 中通过 rewriter 通知 driver。
 
 ## 理解检查
 
@@ -175,6 +179,6 @@ module {
 
 </details>
 
-依据：[LangRef](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/docs/LangRef.md) 的 Value Scoping/Blocks/Regions；[Value.h](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/include/mlir/IR/Value.h) 的 Value/OpOperand；[Dominance.h](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/include/mlir/IR/Dominance.h)；[Verifier.cpp](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/lib/IR/Verifier.cpp)。完整例子参与 P/G，失败例子参与诊断检查；没有执行机器码。
+依据：[LangRef](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/docs/LangRef.md) 的 Value Scoping/Blocks/Regions；[Value.h](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/include/mlir/IR/Value.h) 的 Value/OpOperand；[Dominance.h](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/include/mlir/IR/Dominance.h)；[Verifier.cpp](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/lib/IR/Verifier.cpp)。
 
 下一章：[类型与静态信息](./types_attributes)。

@@ -1,7 +1,7 @@
 ---
 order: 4
 title: Region 操作：执行协议、传值与验证
-updated: 2026-10-02
+updated: 2026-11-24
 ---
 
 # Region 操作：执行协议、传值与验证
@@ -41,9 +41,15 @@ module {
 | `%clipped` | 7 | 区域内 clamp 的结果，也是 yield 的输入 |
 | `%r` | 7 | 父操作结果，随后交给 return |
 
-这四个名字对应不同的 Value。入口与出口处的数值联系来自 scope 的执行约定，不是因为这些 Value 自动互为别名。
+这四个 Value 各有定义位置。Scope 的执行约定把输入绑定到入口参数，再把 yield 的值交给父操作结果，建立它们之间的数值联系。
 
 这张表是语义推演。当前工程能够解析和验证这种表示，但尚未提供 scope 的执行器或 lowering；读取文本不会实际执行表中的计算。
+
+![Region 中的包含关系与传值](./images/scope-values.svg)
+
+图中把同一个例子的包含关系和传值关系放在一起。蓝框是 `my.scope` 操作，它拥有绿色的 body Region；Region 内的灰框是入口 Block `^bb0`。箭头则按本操作的语义追踪 12 怎样进入区域、怎样经过 clamp 得到 7。
+
+输入与 Block 参数之间的箭头由 `my.scope` 的契约规定。Region 容器本身不会自动给任意操作建立这条绑定。
 
 ## 2. Region 结构与 ODS 定义
 
@@ -78,7 +84,7 @@ def YieldOp : Op<My_Dialect, "yield", [Pure, Terminator, HasParent<"ScopeOp">]> 
 
 ### 3.1 入口参数对应
 
-已有一个 i32 的 scope 输入，并不足以保证区域里恰好声明了一个 i32 参数。可以误写为 i64，也可以多写一个参数。因此需要检查两条序列：
+区域参数由 IR 显式声明，可能与 scope 输入写成不同数量或类型。Verifier 因此要比较两条序列：
 
 ```text
 scope 的输入类型序列 == 入口 Block 的参数类型序列
@@ -138,7 +144,7 @@ module {
 }
 ```
 
-入口的 i32 对应没有问题，但父操作宣称结果为 i64，yield 却交出 i32。工具因此报告 `yield types must match result types`。这不是 parser 无法读取语法，而是读出的结构没有满足操作协议。
+入口 i32 匹配，但父操作声明 i64 结果，yield 提供 i32。Parser 可以读入这份结构，verifier 随后因类型不一致报告 `yield types must match result types`。
 
 ## 4. 区域隔离与显式依赖
 
@@ -151,7 +157,7 @@ module {
 
 本例选择隔离，因此后一种写法违反 `IsolatedFromAbove`。这样一来，区域需要的 SSA 输入集中在 scope 的 operand 列表中，克隆或独立处理区域时更容易确定依赖。
 
-隔离不自动证明任意搬移都是安全的，也不禁止所有形式的外部引用。它约束 SSA 捕获；若内部使用符号调用函数，还需遵守符号可见性及调用语义。标准 SCF 的许多区域允许捕获，不能把本例的设计推广成所有 Region 的统一规则。
+隔离约束管理外层 SSA 捕获。符号调用另按符号可见性及调用语义检查；移动区域时也需要检查这些外部关系。标准 SCF 的许多区域允许捕获，具体规则由父操作选择。
 
 ## 5. 可变参数与多结果传递
 
@@ -172,7 +178,7 @@ module {
 
 进入时，x 对应 a，y 对应 b；退出时，第一个 yield 输入 b 对应父结果 0，第二个 a 对应父结果 1。所以入口类型为 `(i32,i64)`，出口类型为 `(i64,i32)`，各自在自己的边界上对应。
 
-不能为了省事给 scope 加上“所有输入与结果同类型”的约束，那会排除这个合法程序。约束应来自执行协议，而不是看到多个值就套用一个现成 trait。
+这里输入和结果可以有不同类型，因此应按入口和出口各自的对应关系验证。若添加“所有输入与结果同类型”的 trait，反而会拒绝这个有效程序。
 
 长度也可以为零：
 
@@ -194,13 +200,13 @@ module {
 
 本例每个 operand/result 列表只有一个可变组，边界明确。如果同一个 operand 列表包含两组可变字段，仅知道总数无法判断各组长度：三个值可能分成 1+2，也可能分成 2+1。
 
-这时需要额外的分段约定，例如 `AttrSizedOperandSegments`，或在语义确实要求等长时使用 `SameVariadicOperandSize`。多组 optional/variadic 的布局及访问器必须依据这种约定生成；本工程没有实现多组分段，不能把单组的结果直接当作验证证据。
+多组 optional/variadic 需要分段约定，例如 `AttrSizedOperandSegments`，或语义要求各组等长时使用 `SameVariadicOperandSize`。访问器据此确定各组范围，具体见[复杂 ODS](./complex_ods)。
 
 ## 6. 结构验证、效果与控制流接口
 
 现在表示能够通过结构、类型和隔离验证，但通用分析仍需知道怎样理解内部计算。
 
-`RecursiveMemoryEffects` 表示需要考察内部操作的效果。外层只是容器，并不意味着内部任意读写都可以被忽略；yield 自身的无内存效果也不能抹去前面操作的效果。
+`RecursiveMemoryEffects` 要求把内部操作的读写计入父操作效果。分析 scope 时，会同时考虑计算体内的写入和 terminator 的行为。
 
 另一类分析要知道控制和数据怎样进入、离开区域。它不会从“恰好一个 Block”自动推导出“执行一次”，也不会仅凭入口和出口类型相等就知道 Value 的映射。相关消费者通常通过 `RegionBranchOpInterface` 等协议获取这些信息。
 
@@ -213,7 +219,7 @@ module {
 | 区域控制流接口 | 通用分析所需的进入、退出及值传递关系 |
 | lowering 或执行实现 | 实际落实“进入一次并传出结果”的语义 |
 
-当前工程实现前两类，后两类留给后续任务。定义完整的语义不等于全部消费者已经实现对它的理解。
+当前工程提供前两类支持，后两类由后续接口章节继续实现。不同消费者通过各自的接口取得执行协议中的相关信息。
 
 ## 理解检查
 
@@ -223,6 +229,6 @@ module {
 
 ## 实现与依据
 
-本章新增的普通整数示例和已有复杂类型、零/多结果用例均由 LLVM `llvmorg-20.1.8` 下的[IR 定义工程](https://github.com/jnfkdsn/aicompiler/tree/main/llvm-mlir/06-ir-definition)验证。传值表为语义推演，未执行 scope 的目标代码。
+本章采用 LLVM 20.1.8，按操作语义推演传值过程。[IR 定义工程](https://github.com/jnfkdsn/aicompiler/tree/main/llvm-mlir/06-ir-definition)提供整数、复杂类型及零/多结果示例，供解析和验证。
 
 [ODS 验证顺序](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/docs/DefiningDialects/Operations.md)、[Verifier.cpp](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/lib/IR/Verifier.cpp)和 [ControlFlowInterfaces.td](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/include/mlir/Interfaces/ControlFlowInterfaces.td)分别用于确认验证阶段及后续区域协议。下一章[解析与打印](./assembly_format)将专门解释表示与文本的对应。

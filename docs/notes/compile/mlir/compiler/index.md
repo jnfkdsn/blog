@@ -1,7 +1,7 @@
 ---
 order: 30
 title: 编译器机制
-updated: 2026-10-04
+updated: 2026-11-24
 excludeFromSidebar: true
 ---
 
@@ -21,9 +21,9 @@ excludeFromSidebar: true
 | [分析事实与优化合法性](./analysis/) | 支配、内存依赖和数据流结论怎样支撑优化 | 五篇串联事实查询、缓存失效、传播与 CSE/DCE/LICM，提供本机对照 |
 | [CPU Lowering 与执行](./lowering/) | 从结构化计算到循环、低层函数与运行结果 | 循环展开、descriptor/ABI、C wrapper、translation、JIT/AOT；链接 CPU 贯通教程 |
 
-读过 Pass 系列后，可以先用[变换基础总览](./transforms/)把各章放回同一条调用链，再进入[操作定义](./ir_definition/op_definition)。具体学习状态与阶段标准见[学习路径](../learning_path)。
+读过 Pass 系列后，可以先用[变换基础总览](./transforms/)把各章放回同一条调用链，再进入[操作定义](./ir_definition/op_definition)。建议阅读顺序与阶段标准见[学习路径](../learning_path)。
 
-三个入口分别负责不同层次：学习路径安排当前从哪里开始；本页展示编译器机制的分类；模块总览说明各章怎样合作。阶段进度集中在学习路径维护。
+三个入口分别负责不同层次：学习路径安排当前从哪里开始；本页展示编译器机制的分类；模块总览说明各章怎样合作。个人进度在工作区学习记录维护，公开学习路径保存通用顺序与阶段标准。
 
 ## 机制之间怎样配合
 
@@ -44,7 +44,7 @@ excludeFromSidebar: true
 
 ## 后续目录怎样增长
 
-`transforms/`、`ir_definition/`、`conversion/`、`memory/`、`lowering/` 与 `analysis/` 的主线已有正文。自定义Bufferization接口和形状/区域/存储扩展已有正文与作者工程。结构化优化六篇已有，Vector/Transform 与固定目标性能证据已连接；目标后端五篇继续解释设备映射与编译。
+各模块分别讲解改写、IR 定义、合法化、存储、降低与分析。后面的结构化优化连接 tiling、fusion、Vector 和 Transform；目标后端继续介绍设备映射、资源约束与编译。
 
 | 模块入口 | 已有主线 |
 |---|---|
@@ -56,4 +56,4 @@ excludeFromSidebar: true
 
 [小 Pass 教程](../tutorials/first_pass)继续保存在贯通教程目录，可由变换基础模块连续读到。知识归档依照职责，学习顺序通过链接表达，无需复制同一篇正文。
 
-精确范围与目标深度见[覆盖表 M01—M10、A01—A08](../coverage)。后续写作参照工作区 `writing_method.md`：覆盖表检查广度，正文沿完整案例解释机制，模块总览连接各章。规范与实现按本地固定版本核对，完整代码和原始运行结果分别保存在 labs 与 artifacts。
+精确范围与目标深度见[覆盖表 M01—M10、A01—A08](../coverage)。

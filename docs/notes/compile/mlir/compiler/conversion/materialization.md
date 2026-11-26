@@ -1,7 +1,7 @@
 ---
 order: 3
 title: 混合表示与边界衔接
-updated: 2026-10-02
+updated: 2026-11-24
 ---
 
 # 混合表示与边界衔接
@@ -20,7 +20,7 @@ max/min 计算 → i32 值 ── ? ──→ return 需要 range
                             函数仍声明返回 range
 ```
 
-这里不能直接把 return 的类型改成 i32，否则就偷偷完成了原本决定留给下一阶段的接口转换。也不能把新 Value 的类型标签改回 range，那会让 arith 结果违反自己的类型约定。
+这里选择保留旧 return 和函数接口，所以需要让新产生的 i32 结果能接到旧的 range 使用者，同时维持 arith 操作自身的 i32 类型。
 
 框架需要一个具体的 Value 来满足旧使用者。把这种衔接实际表现为 IR 的过程称为 **materialization**。
 
@@ -35,7 +35,7 @@ TypeConverter 中的 `range → i32` 回调只回答“用哪一种类型表示�
 | 类型转换 | 类型 `!my.range<-4,7>` | 类型 i32 |
 | 旧使用者的衔接 | 具体 i32 值 `%new`，期望 range | 一个能交给旧 return 的 range 值 |
 
-在真实编译器中，这一步可能涉及打包、解包、扩展、截断或 ABI 表示，必须由语义和表示设计决定。并非任何两个类型之间都存在便宜或合法的转换。
+实际转换可能包含打包、解包、扩展、截断或 ABI 适配。表示设计需要说明这些动作怎样保持语义，并评估其成本。
 
 本例中的 range 与 i32 保存同一个有符号整数。我们不会在这里发明新的运行时表示，而是先用 MLIR 提供的占位操作记录尚待消解的边界：
 
@@ -44,7 +44,7 @@ TypeConverter 中的 `range → i32` 回调只回答“用哪一种类型表示�
     : i32 to !my.range<-4, 7>
 ```
 
-这条 cast 没有实现检查区间、截断整数或重新执行 clamp。它保留一项“新值暂时供旧类型使用”的编译期关系。其合理性来自前面的 limit 转换仍计算出了符合原契约的数值；随意把一个任意 i32 cast 成 range，并不会证明它满足范围。
+这条 cast 记录“新值暂时供旧类型使用”的编译期关系。区间语义由前面的 limit 转换保证：max/min 已将数值限制在范围内。若输入是任意 i32，则还需要能保证范围的实际计算或前提。
 
 ## 3. Source 与 Target Materialization
 
@@ -61,7 +61,7 @@ TypeConverter 中的 `range → i32` 回调只回答“用哪一种类型表示�
 
 本章当前场景需要 source materialization，因为保留下来的 return 仍使用源类型。若后面一条新规则需要 i32，而它能接到的值仍是 range，则可能需要 target materialization。
 
-它们不是“解析前”和“打印后”的两个阶段。框架根据值的映射、所用 converter 和使用者的需求决定是否请求衔接。
+框架根据值映射、converter 和使用者所需类型，决定请求哪一种衔接。
 
 ### 3.2 一个有明确边界的回调
 
@@ -92,7 +92,13 @@ converter.addSourceMaterialization(materializeRangeBoundary);
 converter.addTargetMaterialization(materializeRangeBoundary);
 ```
 
-这两次注册表示同一个辅助函数可以处理这两个方向，不表示每次 conversion 都必然调用两次。上一章没有保留边界，所以最终不需要这些桥接；本章的旧 return 则有实际需求。
+这两次注册使辅助函数可处理两个方向，转换框架再按边界需要调用它。上一章的边界全部转换，本章保留的旧 return 则需要桥接。
+
+![部分转换中的两种边界方向](./images/materialization-directions.svg)
+
+图中用同一种 `range → i32` 类型映射对照两种值衔接。source/target 是相对于转换前后的类型体系命名；判断方向时，要先看消费者实际需要哪种类型。
+
+这里的边界框没有暗示一次真实的机器数值转换。若它只是 `unrealized_conversion_cast`，后续还必须消解或实现这项关系。
 
 ## 4. 一次部分转换的实际结果
 
@@ -127,11 +133,11 @@ failed to legalize unresolved materialization from ('i32')
 to ('!my.range<-4, 7>') that remained live after conversion
 ```
 
-`remained live` 指向关键原因：旧 return 还在使用这条边界。框架不能凭空让这个使用消失，也没有得到如何构造所需值的实现。
+`remained live` 表明旧 return 仍然使用这条边界；当前配置缺少为它构造旧表示的实现，因此转换失败。
 
 这与“limit 规则没有匹配”不同。规则已经能够创建新计算，失败发生在结果要交给旧世界时。排查这种诊断，应该沿使用者寻找谁仍要求旧类型，再决定：一起转换它，还是提供有语义依据的桥接。
 
-较新版本的转换配置与默认行为可能不同；这里的观察使用 LLVM 20.1.8 和默认 `buildMaterializations=true`，不是所有配置下必然出现同一诊断。
+该诊断对应 LLVM 20.1.8、`buildMaterializations=true` 的配置。
 
 ## 6. 消解占位关系与完成转换
 
@@ -177,9 +183,9 @@ module {
 
 它用于观察占位关系的消解，不用于声称 `%x` 已通过范围检查。去掉往返后，函数直接返回原来的 `%x`。
 
-相反，只对第 4 节的 partial 输出运行 reconcile，旧函数仍要返回 range，单向边界仍有使用者，不能仅靠这个清理过程消失。reconcile 没有能力替你完成函数签名转换，也不会为任意 cast 合成运行时代码。
+若只对第 4 节的 partial 输出运行 reconcile，旧 return 仍需要 range，单向 cast 仍被使用，因此会保留。完成这条路径需要继续转换函数接口，或提供具有实际执行语义的桥接。
 
-因此，终点需要分别检查：目标是否合法、IR 是否通过 verifier、未落实的 cast 是否还存在，以及剩余表示是否都有实际执行路径。把 cast 无条件标成 legal 可以允许中间状态，却不是证明后端已经支持它。
+到最终执行阶段，需要确认目标合法、IR 通过 verifier，并为剩余操作提供可执行实现。中间阶段可以允许占位 cast；后续阶段则负责消除或实现它。
 
 ## 理解检查与衔接
 

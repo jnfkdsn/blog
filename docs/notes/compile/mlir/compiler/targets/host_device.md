@@ -1,7 +1,7 @@
 ---
 order: 40
 title: Host 与 Device 编译及启动
-updated: 2026-10-04
+updated: 2026-11-24
 ---
 
 # Host 与 Device 编译及启动
@@ -56,6 +56,10 @@ gpu.wait [%free_y]
 
 如果使用 bare-pointer 约定，就要满足相应形状和布局限制，并在两侧一致配置。单独把设备签名改成一个指针，而 host 仍传完整描述符字段，会让参数解释错位；这种问题与加法本体是否正确无关。
 
+![Outlining 后，主机一侧准备启动与参数，设备函数另行编译成可装载对象；两者按同一入口和 ABI 衔接](./images/launch-and-kernel.svg)
+
+沿上排找“谁发起调用”，沿下排找“调用的代码在哪里”。只有下排的设备代码时，即使入口名正确，设备仍然需要主机给出参数和启动尺寸。
+
 ## 4. 设备侧：GPU 到 NVVM
 
 以 NVIDIA 路径为例，GPU 执行信息被转换到 NVVM/LLVM：
@@ -68,9 +72,9 @@ gpu.wait [%free_y]
 | MemRef 访问 | 描述符字段、指针运算与 LLVM load/store |
 | kernel 标记 | 设备入口相关属性和后续翻译信息 |
 
-实际 load/store 仍要保留正确地址空间、对齐与边界。SCF 条件被降低后，尾部谓词仍控制有效访问；类型变低并不允许删除越界保护。
+lowering 保留 load/store 的地址空间、对齐和边界要求。SCF 条件展开后，尾部谓词继续控制哪些访问有效。
 
-接下来由 NVPTX 后端为选定 chip/features 生成设备表示。PTX 是面向 NVIDIA 的虚拟 ISA 文本；cubin 则包含面向具体架构的设备机器代码。一个文件叫 binary 并不必然意味着里面已经是最终机器码，需要看所选 object format。
+NVPTX 后端按 chip/features 生成设备表示。PTX 保存虚拟 ISA 文本，cubin 保存具体架构的机器代码；对象的 format 指定所承载的形式。
 
 ## 5. 设备产物与 `gpu.binary`
 
@@ -84,11 +88,11 @@ gpu.module @kernels [#nvvm.target<chip = "sm_80", features = "+ptx70">] {
 gpu.binary @kernels [设备对象及其目标、格式、内容]
 ```
 
-这是结构示意，不把省略的对象内容当作可运行示例。一个 binary 可以承载多个目标对象，再由 offloading handler 选择。编译配置应与实际部署架构匹配，不能因为主机安装了某版 CUDA 就推断目标 chip。
+这个结构片段省略了目标对象的内容。一个 binary 可以承载多个目标对象，由 offloading handler 选择；编译时应按实际部署设备指定 chip 和其他目标选项。
 
 对于学习中的编译验证，可以先产生 PTX，检查入口和关键访存/同步，再交给 `ptxas` 检查并形成 cubin。这条过程不需要真的执行 kernel，但它也无法证明运行时数据准备正确、没有竞争或性能符合预期。
 
-四线程轮转在本次 sm_80/+ptx70 编译中产生 `.visible .entry rotate`、16 字节 shared 数组，以及共享写入、`bar.sync 0`、共享读取的顺序。CUDA 12.4 的 ptxas 接受该 PTX，报告使用 12 个寄存器、16 字节 shared memory、无 spill。这是当前编译配置的资源报告；它既不是运行时间，也不说明换一组目标选项仍有相同资源需求。
+四线程轮转在 sm_80/+ptx70 配置下生成 `.visible .entry rotate`、16 字节 shared 数组，以及共享写入、`bar.sync 0`、共享读取的顺序。CUDA 12.4 的 ptxas 报告使用 12 个寄存器、16 字节 shared memory、无 spill。这些资源量可用于分析驻留限制，执行耗时则需要在设备上测量。
 
 ## 6. Host 侧的两次转换
 
@@ -110,7 +114,7 @@ llvm.call @mgpuMemHostUnregisterMemRef(...)
 
 当设备模块已经成为 `gpu.binary`，后续 GPU LLVM translation interface 才能解析启动引用、选择设备对象、嵌入其内容，并生成加载/取函数/启动相关的 LLVM IR 调用。
 
-这也是 Translation 扩展接口的实际用途：支持的非 LLVM 方言操作可以通过自己的翻译接口进入 LLVM IR。这里不是随意让混合 IR 绕过检查，而是 GPU binary 与 launch 有明确的下游消费者和协议。
+Translation 扩展接口将 GPU binary 和 launch 按各自协议翻译到 LLVM IR，使它们可以与 LLVM 方言操作一起进入后续编译。
 
 ## 7. 参数数组与运行时加载
 
@@ -124,7 +128,7 @@ llvm.call @mgpuMemHostUnregisterMemRef(...)
 grid/block + 参数数组 + stream → mgpuLaunchKernel
 ```
 
-CUDA wrapper 再进入驱动 API。Host 目标文件因而需要链接相应运行时和驱动依赖；只有 device 目标文件并不足以执行完整程序。MLIR 的 CUDA wrapper 构建选项及库属于这条运行路径的依赖，普通 CPU 实验不自动具备它们。
+CUDA wrapper 调用驱动 API，host 目标文件因此要链接对应运行时和驱动依赖。配置这条路径时，还需要启用 MLIR 的 CUDA wrapper 构建与库。
 
 如果设备对象是 PTX，驱动还可能在装载时完成 JIT。首次装载和重复调用的成本可能不同；性能测量要区分编译、装载、分配、传输和 kernel 时间，不能把只测 kernel 的数值当作整个应用耗时。
 
@@ -150,4 +154,4 @@ CUDA wrapper 再进入驱动 API。Host 目标文件因而需要链接相应运�
 
 下一篇转向[NPU 表示与执行约束](./npu_constraints)，用固定项目说明同样的编译问题怎样采用不同的表示和运行时。
 
-本文已核验 outlining、GPU→NVVM、host wrapper 转换、PTX 序列化、ptxas 生成 cubin，以及 Host LLVM IR/object 编译。当前 PTX 路径的 host.o 留有 `mgpuModuleLoadJIT`、`mgpuModuleGetFunction`、`mgpuLaunchKernel` 等外部符号，需要部署时的运行时链接和设备访问；本环境未执行 GPU 或测量性能。固定实现入口：[GPUToNVVM pipeline](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/lib/Dialect/GPU/Pipelines/GPUToNVVMPipeline.cpp)、[GPU translation](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/lib/Target/LLVMIR/Dialect/GPU/GPUToLLVMIRTranslation.cpp)、[对象选择与启动生成](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/lib/Target/LLVMIR/Dialect/GPU/SelectObjectAttr.cpp)。
+本章展示到 PTX、cubin 和 Host object 的编译产物。host.o 通过 mgpuModuleLoadJIT、mgpuModuleGetFunction 和 mgpuLaunchKernel 等外部符号连接运行时；实际启动还需链接运行库并取得设备访问。本例尚未进行设备计时。源码入口：[GPUToNVVM pipeline](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/lib/Dialect/GPU/Pipelines/GPUToNVVMPipeline.cpp)、[GPU translation](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/lib/Target/LLVMIR/Dialect/GPU/GPUToLLVMIRTranslation.cpp)、[对象选择与启动生成](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/lib/Target/LLVMIR/Dialect/GPU/SelectObjectAttr.cpp)。

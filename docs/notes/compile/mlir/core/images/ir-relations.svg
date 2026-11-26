@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="271" viewBox="0 0 640 271" role="img" aria-labelledby="title desc">
+  <title id="title">同一条加法的两种关系</title>
+  <desc id="desc">边框表示对象包含关系，箭头从值的定义指向使用者。</desc>
+  <defs><marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L8 4 L0 8 Z" fill="#45576c"/></marker></defs>
+  <g font-family="system-ui, sans-serif" fill="#1c293b">
+    <rect x="1" y="1" width="638" height="269" rx="7" fill="#fafbfc" stroke="#cdd5df"/>
+    <text x="16" y="27" font-size="18" text-anchor="start" font-weight="600">对象的归属</text>
+    <text x="348" y="27" font-size="18" text-anchor="start" font-weight="600">值的使用</text>
+    <rect x="12" y="41" width="305" height="216" rx="7" fill="#e8f1ff" stroke="#72869c"/>
+    <text x="22" y="68" font-size="17" text-anchor="start" font-weight="600">func.func @add_one</text>
+    <rect x="24" y="78" width="280" height="166" rx="7" fill="#fff" stroke="#72869c"/>
+    <text x="38" y="103" font-size="17" text-anchor="start" font-weight="400">函数体 Region</text>
+    <rect x="39" y="112" width="250" height="119" rx="7" fill="#e1f4ed" stroke="#72869c"/>
+    <text x="52" y="137" font-size="16" text-anchor="start" font-weight="600">入口 Block · 参数 %x</text>
+    <text x="55" y="162" font-size="16" text-anchor="start" font-weight="400">arith.constant</text>
+    <text x="55" y="189" font-size="16" text-anchor="start" font-weight="400">arith.addi</text>
+    <text x="55" y="216" font-size="16" text-anchor="start" font-weight="400">func.return</text>
+    <rect x="333" y="47" width="122" height="39" rx="7" fill="#e1f4ed" stroke="#72869c"/>
+    <text x="394.0" y="72.5" font-size="16" text-anchor="middle" font-weight="400">%x（块参数）</text>
+    <rect x="465" y="47" width="160" height="39" rx="7" fill="#e8f1ff" stroke="#72869c"/>
+    <text x="545.0" y="72.5" font-size="16" text-anchor="middle" font-weight="400">%one（常量结果）</text>
+    <rect x="408" y="123" width="143" height="39" rx="7" fill="#e8f1ff" stroke="#72869c"/>
+    <text x="479.5" y="148.5" font-size="18" text-anchor="middle" font-weight="400">arith.addi</text>
+    <path d="M395 86 V102 L440 121" fill="none" stroke="#45576c" stroke-width="2" marker-end="url(#arrow)"/>
+    <path d="M545 86 V102 L520 121" fill="none" stroke="#45576c" stroke-width="2" marker-end="url(#arrow)"/>
+    <rect x="408" y="211" width="143" height="39" rx="7" fill="#fff1d6" stroke="#72869c"/>
+    <text x="479.5" y="236.5" font-size="18" text-anchor="middle" font-weight="400">func.return</text>
+    <path d="M480 162 V208" fill="none" stroke="#45576c" stroke-width="2" marker-end="url(#arrow)"/>
+    <text x="489" y="191" font-size="16" text-anchor="start" font-weight="400">%y</text>
+  </g>
+</svg>

@@ -1,14 +1,14 @@
 ---
 order: 2
 title: 类型降低、ABI 与函数边界
-updated: 2026-10-19
+updated: 2026-11-24
 ---
 
 # 类型降低、ABI 与函数边界
 
-上一章已经解释，一个 MemRef 可以由指针、offset、sizes 和 strides 描述。函数内部据此计算地址，再读取元素。但如果这个 MemRef 是另一个函数传进来的，表示变化就不能只发生在函数内部：**调用者要按新的方式传，接收者也要按新的方式收。**
+上一章用指针、offset、sizes 和 strides 描述 MemRef。跨函数传递时，双方都要采用相同表示：**调用者准备这些字段，接收者据此计算地址和读取元素。**
 
-本章从两个 MLIR 函数之间的一次调用开始，追踪一个 MemRef 参数怎样变成一组低层参数。先把这条调用链转换正确，再考虑外部 C 程序如何接入。C wrapper 是接口适配的一种应用，不是所有 MLIR 程序都必须经过的步骤。
+本章先追踪两个 MLIR 函数之间的一次调用，观察 MemRef 参数怎样展开为低层参数。随后用 C wrapper 展示外部程序怎样按相应接口接入。
 
 ```text
 调用者传入一个 MemRef → 被调用函数接收 MemRef → 读取元素
@@ -59,7 +59,7 @@ llvm.func @read2d(
     %i: i64, %j: i64) -> i32
 ```
 
-三个高层参数变成九个低层参数：一个 MemRef 展开为七个字段，两个 index 分别成为 i64。矩阵内容仍在原来的存储中；增加的是明确传递的元数据，不是七份数据副本。
+三个高层参数变成九个低层参数：MemRef 提供七个描述字段，两个 index 各变成 i64。字段引用原来的矩阵存储，并传递定位元素所需的元数据。
 
 ## 2. 调用点与函数定义的协同转换
 
@@ -87,6 +87,10 @@ aligned + (offset + i×stride0 + j×stride1) 个 i32
 
 这种“参数怎样表示与排列、结果怎样返回”的低层接口约定，属于 **ABI（Application Binary Interface，应用二进制接口）**。本章关注 MLIR 到 LLVM 时的参数和结果表示；最终具体使用哪些机器寄存器或栈位置，继续由目标调用约定与后端处理。即使调用双方都来自 MLIR，也需要共同遵守这套约定。
 
+![同一个 MemRef 参数，降低后按描述符字段传递](./images/memref-call-abi.svg)
+
+图中展开二维 MemRef 的两个指针和五个整数，索引参数另外传递。调用点与函数声明一起降低后，接收者按这些字段还原同一个视图。
+
 ## 3. 函数转换与调用转换的配合
 
 上述变化由 Func-to-LLVM 的转换规则完成。可以沿同一条调用链理解它的工作：
@@ -102,9 +106,9 @@ aligned + (offset + i×stride0 + j×stride1) 个 i32
 
 这里出现的 **Adaptor 与描述符是不同的对象**：Adaptor 是编译器中的辅助访问接口，让 Pattern 取得转换框架准备好的操作数；在本例中，其中一个操作数表示 MemRef 描述符。描述符是被生成程序中的数据表示。Adaptor 本身不会成为目标程序里的结构体。
 
-编译时，规则创建拆分、组装、调用和访存的 IR；目标程序运行时，这些操作才处理具体窗口和索引。源码中创建一条字段提取操作，不等于编译器此刻已经取得运行时的 stride 数值。
+编译规则生成拆分、组装、调用和读取字段的 IR；目标程序运行时，这些操作才取得当前输入的窗口信息和 stride。
 
-具体实现可以在 LLVM 20.1.8 的 [FuncToLLVM.cpp](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/lib/Conversion/FuncToLLVM/FuncToLLVM.cpp) 中对应到函数转换和调用转换，并在 [LLVMTypeConverter](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/lib/Conversion/LLVMCommon/TypeConverter.cpp) 中查看签名转换与 operand 展开。理解当前过程不要求记住所有辅助方法。
+函数与调用转换见 LLVM 20.1.8 的 [FuncToLLVM.cpp](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/lib/Conversion/FuncToLLVM/FuncToLLVM.cpp)，签名映射与 operand 展开见 [LLVMTypeConverter](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/lib/Conversion/LLVMCommon/TypeConverter.cpp)。
 
 ## 4. 外部调用与 C 包装函数
 
@@ -206,13 +210,13 @@ free(output.allocated);
 | `output` 结构体 | C 调用方 | 返回矩阵的指针、offset、sizes、strides |
 | 新矩阵的数据 buffer | `make_copy` 内的 alloc | 复制得到的六个浮点数 |
 
-把描述符写入 `output` 不等于再复制一次矩阵。数据复制来自函数中明确写出的 `memref.copy`。按当前所有权协议，输入仍是借用，返回的新分配由调用方负责释放；free 的对象是 `output.allocated`，而不是局部结构体的地址 `&output`。本例默认 CPU 分配方式与 C `free` 匹配，其他 allocator 需要使用匹配的释放方式。
+函数通过 `memref.copy` 复制矩阵，再把新存储的描述符写入 `output`。输入按借用处理，返回分配由调用方负责释放，释放地址为 `output.allocated`。本例分配方式与 C `free` 匹配；其他 allocator 应使用对应的释放方法。
 
 ## 6. 接口一致性与生命周期
 
 现在可以把整条过程分清：类型降低决定 MemRef 采用什么低层表示，函数和调用转换把这种表示送过边界，必要时 wrapper 连接外部调用者。指针和元数据传递正确之后，程序仍要遵守视图和所有权契约。
 
-例如 `make_copy` 的参数类型是静态连续的 `memref<2x3xf32>`，调用方应提供匹配的形状和步长；不能只修改结构体字段，就把它变成一般窗口接口。返回新分配与返回输入的 subview 也有不同的别名和生命周期关系，即使两者看起来都是“返回一个描述符”。
+`make_copy` 的静态连续 `memref<2x3xf32>` 参数要求相应形状和步长。要接收任意窗口，应设计支持动态布局的接口。返回独立分配和返回输入 subview 也需分别约定别名与释放责任。
 
 遇到调用结果异常，可以沿这条数据流核对：实际调用的是内部函数还是 wrapper；参数顺序与位宽是否匹配；描述符是否指向正确窗口；访问期间存储是否仍有效。类型正确和链接成功都不能代替这些契约。
 

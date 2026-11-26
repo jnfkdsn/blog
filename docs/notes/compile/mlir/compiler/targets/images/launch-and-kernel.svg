@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="620" height="210" viewBox="0 0 620 210" role="img" aria-labelledby="title desc">
+<title id="title">同一次启动的两条编译路径</title><desc id="desc">outlining 留下主机启动点和设备函数，设备目标对象与主机启动代码在运行时按入口名和调用约定衔接。</desc>
+<defs><marker id="tip" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M1 1 L8 4.5 L1 8" fill="none" stroke="#465d71" stroke-width="1.7"/></marker></defs>
+<rect x="1" y="1" width="618" height="208" rx="8" fill="#fafbfd" stroke="#ccd5df"/>
+<g font-family="system-ui, sans-serif" fill="#182c42">
+<text x="16" y="25" font-size="18" text-anchor="start" font-weight="600">从一个 gpu.launch 分出两条路径</text>
+<rect x="15" y="43" width="170" height="42" rx="5" fill="#e3edf8" stroke="#8293a3"/>
+<text x="100.0" y="70.0" font-size="17" text-anchor="middle" font-weight="400">host：launch_func</text>
+<rect x="238" y="43" width="171" height="42" rx="5" fill="#fff0d8" stroke="#8293a3"/>
+<text x="323.5" y="70.0" font-size="17" text-anchor="middle" font-weight="400">打包实参、启动</text>
+<rect x="15" y="131" width="170" height="42" rx="5" fill="#e3edf8" stroke="#8293a3"/>
+<text x="100.0" y="158.0" font-size="17" text-anchor="middle" font-weight="400">device：gpu.func</text>
+<rect x="238" y="131" width="171" height="42" rx="5" fill="#daf0e7" stroke="#8293a3"/>
+<text x="323.5" y="158.0" font-size="17" text-anchor="middle" font-weight="400">设备目标对象</text>
+<path d="M185 64 H235" fill="none" stroke="#465d71" stroke-width="1.8" marker-end="url(#tip)"/>
+<path d="M185 152 H235" fill="none" stroke="#465d71" stroke-width="1.8" marker-end="url(#tip)"/>
+<rect x="461" y="88" width="144" height="42" rx="5" fill="#e3edf8" stroke="#8293a3"/>
+<text x="533.0" y="115.0" font-size="17" text-anchor="middle" font-weight="400">运行目标入口</text>
+<path d="M409 64 H430 V99 H458" fill="none" stroke="#465d71" stroke-width="1.8" marker-end="url(#tip)"/>
+<path d="M409 152 H430 V119 H458" fill="none" stroke="#465d71" stroke-width="1.8" marker-end="url(#tip)"/>
+<text x="280" y="191" font-size="15" text-anchor="middle" font-weight="400">入口名和参数 ABI 要对应；输入输出数据由 host 另行准备。</text>
+</g></svg>

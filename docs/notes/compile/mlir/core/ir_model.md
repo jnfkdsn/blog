@@ -1,91 +1,16 @@
 ---
 order: 1
 title: IR 对象模型与表示
-updated: 2026-09-06
+updated: 2026-11-21
 tags: [mlir, ir, operation, region, block, symbol]
 status: draft
 ---
 
 # IR 对象模型与表示
 
-前置知识：能阅读简单函数和加法即可。本文建立所有方言共同使用的容器模型，解释表示形式、对象归属及 Region 类别；SSA 的合法使用规则在[下一章](./values_ssa)展开。
+读一段 MLIR 可以沿两个方向走。找一条加法属于哪个函数，沿着 **Operation、Region、Block 的包含关系** 走。找加法的两个输入由谁提供，沿着 **Value 的定义和使用关系** 走。编译器把这两种关系保存在同一份 IR 里。先看清它们，再看文本如何读入、Pass 修改的又是什么。
 
-文中 `%x` 表示一个有类型的值（Value），operand 是操作使用的输入，result 是操作定义的输出。暂时用这三个直观含义阅读结构即可。
-
-版本：LLVM 20.1.8。完整模块、示意树和局部语法分别标注；验证范围见[使用指南](../guides/inspecting_ir)。
-
-## 1. 同一份 IR 的几种表示
-
-MLIR 有可读文本、编译器内存对象和用于保存/传输的 bytecode。它们表达同一套 IR 内容，不是两套需要分别编译的语言。
-
-```text
-文本 .mlir ── parser ──→ 内存 IR 对象 ── printer ──→ 文本 .mlir
-                              ↑   ↓
-                           分析与变换
-                              ↕
-                      bytecode 读写（序列化）
-```
-
-这里的“内存”是运行编译器的进程内存，存放 Operation、Block 等 C++ 对象；与目标程序在 GPU/NPU 上分配的 tensor buffer 是两回事。前端也可以用 IR API 直接创建这些对象，不必先写出文本再解析。
-
-以 `%y = arith.addi %x, %one : i32` 为例：parser 识别操作名和语法，把 `%x`、`%one` 解析为对已定义 Value 的引用，创建加法 Operation 及其结果。Pass 可以修改输入、替换结果的使用或删除节点；printer 再为对象分配可读名字并输出。因此改写通常不是字符串替换，打印后的 `%0`/`%1` 名称变化也不代表算法变化。
-
-文本中的自定义格式和通用格式仍然描述同一批对象。通用格式显式写出输入类型、结果类型、属性/Properties 和 Region；自定义格式可以隐藏可推导信息、隐式 terminator 或入口 Block 标签。下文用同一个函数展示两种形式。
-
-`MLIRContext` 提供方言注册/加载和类型、属性等共享基础设施；模块 Operation 保存这份程序的结构。Context 不是模块、不是执行设备，也不等同于 PassManager。多个模块可以使用同一 Context，但操作的所有权仍由各自 IR 结构管理。
-
-## 2. 为什么把函数和加法都叫 Operation
-
-如果把 Operation 理解为“加、减、乘这样的简单指令”，那么“Operation 拥有函数体”确实显得矛盾。MLIR 对 Operation 的抽象范围更大：它是一个有名称、有语义、可以被编译器分析和变换的 IR 节点。
-
-这个节点可以表达一次计算，也可以表达一项定义，或者表达一个带内部程序的控制结构。
-
-| Operation | 它表达什么 | 是否拥有 Region |
-|---|---|---|
-| `arith.addi` | 一次整数加法 | 0 个 |
-| `func.call` | 对某个函数的一次调用 | 0 个 |
-| `func.func` | 函数定义或声明 | 1 个；外部声明的 Region 没有 Block |
-| `scf.for` | 一个结构化循环 | 1 个，用于循环体 |
-| `scf.if` | 一个结构化条件结构 | 2 个，分别用于 then/else；允许省略 else 的形式中 else Region 为空 |
-| `builtin.module` | 模块结构 | 1 个，用于容纳定义等内容 |
-
-这套设计让编译器可以统一处理“计算节点”和“结构节点”。例如，通用遍历可以先访问一个 Operation，再递归进入其内部 Region。各个节点的具体合法性和执行方式仍由对应操作规定。
-
-“都是 Operation”不意味着它们有相同执行语义，也不意味着它们都对应一条机器指令。
-
-## 3. 三种对象的精确定义
-
-### Operation：拥有语义的节点
-
-一个 Operation 可以有输入、结果、静态信息、Location、后继 Block 和嵌套 Region；具体有哪些内容，由它的定义决定。
-
-若一个 Operation 带有内部程序，它通过 Region 来容纳这些程序。例如，`scf.for` 的内部程序是循环体，`func.func` 的内部程序是函数体。
-
-### Region：由所属 Operation 解释的程序区域
-
-Region 由某个 Operation 拥有，里面组织着 Block。Region 本身不是“函数”这个语义对象。
-
-- `func.func` 拥有的 Region 被解释为函数体。
-- `scf.for` 拥有的 Region 被解释为循环体。
-- `scf.if` 拥有的两个 Region 被解释为两个分支区域。
-
-**Region 表示什么、何时进入、参数怎样绑定、怎样结束，要看它属于哪个 Operation。** 仅仅知道某对象是 Region，还不足以判断它如何执行。
-
-Region 可以为空，也可以包含一个或多个 Block，具体数量受父 Operation 的约束。例如 `scf.for` 的循环体要求恰好一个 Block；函数体可以包含多个 Block。
-
-### Block：带参数的 Operation 序列
-
-一个 Block 包含一列 Operation，也可以有 Block Argument。
-
-在本课涉及的 SSACFG Region 中，Block 对应基本块：同层操作按顺序执行，最后由 terminator 规定是否转移到同层其他 Block，或退出当前区域。
-
-Block 不专属于条件跳转。最普通的直线计算函数也有入口 Block。Block 中还可以出现拥有内部 Region 的 Operation；内部区域的控制流不等于这个 Block 的同层控制流。
-
-在 Graph Region 中，不能直接套用上述按顺序执行的规则。具体 Region 的类别和语义，需要结合其所属 Operation 判断。
-
-## 4. 用没有分支的函数看清包含关系
-
-下面的完整模块只有一个函数：
+## 1. 函数里的对象和值
 
 <!-- mlir-example: ir-model-1 -->
 ```text
@@ -98,62 +23,17 @@ module {
 }
 ```
 
-可以把它的内存对象画成：
+左图中的框表示归属，右图的箭头表示把值用作输入。请在两边各找一次同一条 `arith.addi`。
 
-```text
-builtin.module                         Operation
-└── 模块 Region
-    └── 模块 Block
-        └── func.func @add_one          Operation
-            └── 函数体 Region
-                └── 入口 Block
-                    ├── 参数：%x: i32
-                    ├── arith.constant Operation
-                    ├── arith.addi     Operation
-                    └── func.return    Operation
-```
+![加法属于函数体入口块，使用入口参数 %x 和常量结果 %one，结果 %y 被返回操作使用](./images/ir-relations.svg)
 
-这个函数没有条件跳转，依然有 Block。Block 是组织函数体的结构，不是出现 `if` 后才产生的特殊对象。
+**沿包含关系读。** 模块 `builtin.module` 是一个 Operation，它的 Region 中有一个 Block，块中放着函数定义 `func.func @add_one`。图中放大了这个函数。函数也是 Operation，拥有一个表示函数体的 Region。入口 Block 按顺序保存常量、加法和返回这三条 Operation。即使函数完全没有分支，仍然需要这个块来容纳参数和操作。
 
-程序中的两个大括号层次分别是模块 Region 和函数体 Region。Block 的存在被简洁语法隐藏了，所以不能通过数大括号来数 Block。
+**沿值的使用关系读。** 加法的第一个输入（operand）是入口 Block 的参数 `%x`，第二个输入是常量操作产生的结果（result）`%one`。加法自己的结果是 `%y`，它被 `func.return` 使用。于是“加法在哪个块中”和“加法用了哪个常量”有不同答案。在变换中，把使用 `%one` 的位置改为另一个可用的 i32 值，会改变加法读取的值，而加法仍属于原来的 Block。
 
-### 隐藏的入口 Block 在哪里
+## 2. Operation 如何容纳一段程序
 
-把函数单独以通用格式表达，会更容易看到它。下面是一个完整模块，和上例表达相同计算；属性中 `function_type` 声明函数签名：
-
-<!-- mlir-example: ir-model-2 -->
-```text
-"builtin.module"() ({
-  "func.func"() <{sym_name = "add_one", function_type = (i32) -> i32}> ({
-  ^bb0(%x: i32):
-    %one = "arith.constant"() <{value = 1 : i32}> : () -> i32
-    %y = "arith.addi"(%x, %one) : (i32, i32) -> i32
-    "func.return"(%y) : (i32) -> ()
-  }) : () -> ()
-}) : () -> ()
-```
-
-这里的 `^bb0(%x: i32):` 显式声明函数入口 Block。自定义函数语法把 `%x` 放到了函数参数列表中，并省去了 Block 标签。
-
-函数定义这一 Operation 的通用签名是 `() -> ()`：它没有普通 SSA operand 和 result。函数将来调用时的输入输出类型放在 `function_type` 中，不能把这两类签名混在一起。
-
-## 5. 为什么 Operation 能包含另一个 Operation
-
-从对象结构看，它们不是直接任意嵌套，而是通过固定层级组织：
-
-```text
-Operation
-  → Region
-    → Block
-      → Operation
-        → Region
-          → Block
-            → ...
-```
-
-这不是类型定义上的矛盾，而是一种递归容器结构。上面的 `func.func` 和下面的 `arith.addi` 都是 Operation 的具体实例，处在不同层级、具有不同语义。
-
-例如：函数中有一个循环，循环中有一个加法。
+Operation 是有名字和语义的节点。加法这样的节点只要操作数和结果就能表达计算；函数定义和循环还需要记下内部程序，它们用 Region 保存这部分结构。每个 Region 归一个 Operation 所有，内含一组有序的 Block。每个 Block 又可以保存其他 Operation。这样，通用遍历沿同一套结构能找到循环体深处的加法，循环要执行几轮则由 `scf.for` 的语义决定。
 
 ```text
 func.func
@@ -168,15 +48,11 @@ func.func
         └── func.return
 ```
 
-函数入口 Block 直接包含的是 `scf.for` 这个节点。加法通过循环体 Region 和 Block 间接位于函数中。
+现在从树中的加法往外读。直接拥有它的是循环体 Block，再向外经过循环体 Region 才到 `scf.for`。在上一层，`scf.for` 和 `func.return` 属于同一个函数入口 Block。只数文本里的花括号容易漏掉入口块，因为简洁写法可以省略块标签。
 
-这个结构同时保留“它是循环”和“循环内部计算什么”，后续 Pass 才可以针对整个循环做分析或变换。
+若需要判断执行方向，再看父操作和块末尾的操作。函数中的 `scf.if` 把分支程序放在自己的 Region 中；换成 `cf.cond_br`，分支操作会选择同一 Region 中的后继 Block。这里多出的是**控制流**关系，箭头的终点是接下来进入的块。
 
-## 6. 函数定义和函数调用的区别
-
-**Operation 包含 Region 的函数例子，指的是函数定义 `func.func`，并不是函数调用 `func.call` 把被调用函数嵌入自己。**
-
-看下面的完整模块：
+## 3. 函数定义与调用点
 
 <!-- mlir-example: ir-model-3 -->
 ```text
@@ -194,110 +70,53 @@ module {
 }
 ```
 
-它的结构是两个并列的函数定义：
+模块的 Block 里并列放着 `@caller` 和 `@callee` 两项定义。沿包含关系走进 `@caller`，能找到一条 `func.call`。它的操作数 `%input` 和结果 `%output` 参与调用者内部的数据流；另一个字段通过符号名 `@callee` 指向被调用的定义。沿这个名字才找得到另一个函数体。在多个位置调用同一个函数时，每个调用点各有自己的参数和结果，它们可以引用同一项定义。
 
+到这里可以区分四种常见关系。**包含**回答“这个节点放在哪里”，**值的使用**回答“读哪个定义的值”，**控制流**回答“接下来进入哪个块”，**符号引用**回答“这个名字指向哪项定义”。从文字或图中看到一根箭头时，先辨认它连接的是哪两种对象。
+
+## 4. 文本、内存对象与打印
+
+读入 `@add_one` 时，parser 创建函数、入口块和块中的操作。处理加法的 `%one` 时，它会查找前面建立的值，把加法的第二个操作数连到常量的结果。此后 Pass 可以直接遍历对象、修改引用。printer 再沿对象结构输出文本，并为值分配可读名字。即使打印出的 `%one` 变成 `%0`，仍然能沿加法的第二个操作数找到同一个定义。前端也可以通过 C++ API 在内存中直接构造这套对象。
+
+同一个函数还可以写成通用文本格式。请找出上一种写法隐含的入口 Block。
+
+<!-- mlir-example: ir-model-2 -->
 ```text
-模块 Block
-├── func.func @callee
-│   └── Region → Block → 常量、加法、返回
-└── func.func @caller
-    └── Region → Block
-        ├── func.call @callee
-        └── func.return
+"builtin.module"() ({
+  "func.func"() <{sym_name = "add_one", function_type = (i32) -> i32}> ({
+  ^bb0(%x: i32):
+    %one = "arith.constant"() <{value = 1 : i32}> : () -> i32
+    %y = "arith.addi"(%x, %one) : (i32, i32) -> i32
+    "func.return"(%y) : (i32) -> ()
+  }) : () -> ()
+}) : () -> ()
 ```
 
-`func.call` 保存对 `@callee` 的符号引用，并使用 `%input` 作为参数、产生 `%output`。它自身没有 Region，也没有拥有 `@callee` 的函数体。
+`^bb0(%x: i32)` 显式列出块和参数；函数的简洁写法把参数放在函数名后。通用格式中 `func.func` 操作自身的签名是 `() -> ()`，被定义函数接收和返回 i32 的约定则保存在 `function_type` 中。前者描述定义节点在模块里使用和产生的 SSA 值，后者描述调用这个函数时的类型。
 
-运行时发生调用，是执行语义；IR 中谁拥有谁，是静态结构。调用次数增加，不会自动让 IR 中出现更多被调用函数体。编译器若执行内联变换，才会进一步改写调用点并引入对应计算。
+需要保存或传输 IR 时，还可以使用 bytecode 来序列化这份结构。在 C++ 中，`Operation *` 提供通用访问，`func::FuncOp` 等类型化包装提供特定字段的访问器。方言注册、共享类型与属性等基础设施位于 `MLIRContext`，具体程序的包含树则从模块节点向下展开。
 
-## 7. 不要把 C 大括号直接对应为 MLIR Block
+## 5. Region 的执行规则与作用域
 
-C 中 `if (...) { ... }` 的花括号表示源语言语法结构。MLIR 中同一个条件行为可以选择不同层次的表示：
+函数体通常按控制流图执行。进入函数时参数传给入口 Block，分支可以把值传给后继 Block 的参数。这样的 Region 称为 **SSACFG Region**。入口块不能同时作为该 Region 内分支的目标；需要循环回边时可以另设一个 header 块。块末尾的 terminator 给出跳转或退出的方式。
 
-| 表示 | 同层结构 | 分支代码在哪里 |
-|---|---|---|
-| `scf.if` | 外层 Block 中的一条结构化 Operation | 它拥有的 then/else Region 中 |
-| `cf.cond_br` | 当前 Block 的终结操作 | 同一 Region 内的目标 Block 中 |
+模块体属于 **Graph Region**。在本章的 LLVM 20.1.8 中，这类 Region 限于一个 Block，块内操作的排列不施加 SSACFG 的先定义后使用要求。模块里两个函数的书写次序也不决定谁调用谁。操作自身仍可施加约束。比如模块体允许省去终结操作，而 `scf.for` 的简洁写法可以隐去按规则补出的 `scf.yield`。
 
-例如一个 `scf.if` 可以位于函数的唯一入口 Block 中：这个 Block 先运行条件结构，再运行后面的操作。虽然执行时存在条件选择，函数体却不必因此拥有多个同层 Block。
+| 阅读一个带 Region 的操作时 | 可在定义中确认的约束 |
+|---|---|
+| 内部程序有几块 | 普通函数定义可以有多个块，外部函数声明的 Region 为空，`scf.for` 循环体有一个块。 |
+| 块参数从哪来 | 父操作规定入口协议。函数入口从调用取得参数，循环体取得归纳变量和循环携带值。 |
+| 哪些外层值可用 | 函数体具有隔离约束，循环体则可以使用满足作用域和支配条件的外层值。 |
+| 内部结果怎样给外部用 | Region 自身没有 SSA 结果列表。带迭代结果的 `scf.for` 解释 `scf.yield` 提供的值，循环结束后外部使用的是 `scf.for` 的结果。 |
 
-将结构化条件转换为显式 CFG 后，通常就会出现多个同层 Block。计算行为可以相同，IR 的组织方式发生了变化。
+这些约束会直接影响 IR 能否通过验证。例如，若在 `@add_one` 中插入一个循环，把常量定义移进循环体，却让循环外的加法继续使用它，循环外就引用了一个在那里不可见的定义。即使操作数和结果仍然都是 i32，这个程序也有错。需要核对某个具体操作的约束时，可以从方言定义查起。[函数定义](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/include/mlir/Dialect/Func/IR/FuncOps.td) · [循环定义](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/include/mlir/Dialect/SCF/IR/SCFOps.td) · [模块定义](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/include/mlir/IR/BuiltinOps.td)
 
-## 8. 四种关系分别看
+## 源码对照与自查
 
-阅读 IR 时，可以分别画四张小图：
+读 LLVM 20.1.8 的 IR API 时，可以先选一个方向查。向外找所属块用 `Operation::getBlock`，向内找区域用 `getRegions`，查看块参数和操作序列则分别用 `Block::getArguments`、`getOperations`。[Operation.h](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/include/mlir/IR/Operation.h) · [Block.h](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/include/mlir/IR/Block.h) · [MLIR LangRef](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/docs/LangRef.md)
 
-| 关系 | 例子 | 要回答的问题 |
-|---|---|---|
-| 包含关系 | `func.func → Region → Block → arith.addi` | 这个操作属于哪个结构？ |
-| 数据依赖 | 常量的结果被加法使用 | 输入从哪里来，结果被谁使用？ |
-| 控制流 | `cf.br` 指向另一个 Block | 同一 Region 内下一步进入哪里？ |
-| 符号引用 | `func.call @callee` | 通过名字引用了哪项定义？ |
+1. 在 `@add_one` 里，把 `return %y` 改成返回 `%x`。哪一条值的使用关系变了？三条操作的包含关系有何变化？
+2. 在 `@caller` 中再调用一次 `@callee`。模块里会多出什么对象？两次调用从哪里找到同一项函数定义？
+3. printer 改变了常量结果的名字。再看打印后的加法，怎样判断它的第二个操作数是否仍使用原来的常量？
 
-不要因为函数运行时调用了另一个函数，就在包含图中把后者画成前者的孩子；也不要因为一个 Operation 使用了外层 Value，就把 Value 的定义移动到它的 Region 中。
-
-## 9. 结构边界与合法性
-
-理解通用容器结构后，再加入具体约束：
-
-- Region 的入口 Block 参数如何获得值，由父 Operation 规定。函数参数来自调用，循环参数来自边界与初始值等。
-- 在 SSACFG Region 中，非入口 Block 的参数通常通过前驱分支传入。
-- `func.func` 的函数体带有隔离约束，不能直接捕获其外层 SSA Value。
-- `scf.for` 的循环体可以使用合法的外层 Value，例如循环外定义的常量。
-- 内层 Region 的 Value 不能直接越过其作用域供外层使用；应通过父 Operation 规定的结果传递机制。
-- `func.return` 和 `scf.yield` 的语义不同，不能随意替换。它们各自需要满足所在结构的约束。
-
-后续阅读一个陌生 Operation，先检查“输入、结果、Region 数量、Block 约束、终结操作、传值规则”这六项，通常就能建立它的结构。
-
-## 10. Region 类别与终结约束
-
-SSACFG Region 用顺序与 CFG 描述执行：正常进入非空区域时从入口 Block 开始，操作的结果在执行后供后续操作使用，Block 末尾的 terminator 决定同层跳转或交还控制。入口 Block 不能成为该 Region 内分支的目标；需要循环回边时，另建 header Block。
-
-Graph Region 适合没有这种块内顺序约束的图表示。在 LLVM 20.1.8 中 Graph Region 限于一个 Block，OpResult 在本区域内的使用不要求普通 CFG 的先定义后使用顺序；这不等于随意忽略嵌套区域、隔离或操作自身的约束。
-
-`builtin.module` 的 body 是一个常见的 Graph Region：它组织函数和符号定义，函数在文本中写在前面或后面通常不决定调用先后。`func.func` 的 body 则是 SSACFG Region。两者都通过 Region/Block 容纳 Operation，但不能套用同一执行规则。
-
-Block 通常需要 terminator；例外由所属结构明确声明。`builtin.module` 采用无需 terminator 的约定；`func.func` 使用 `func.return` 或 CF 跳转；`scf.for` 使用 `scf.yield`。自定义语法省略一个可隐式补出的 terminator，与操作根本不要求 terminator 是不同情况。
-
-Region 自身没有结果列表、类型或属性字典。所谓“区域返回值”由 terminator 的 operand 表达，再由父 Operation 解释；真正可供外部 SSA 使用的结果属于父 Operation。这正是 `scf.yield` 与 `scf.for` result 不属于同一对象的原因。
-
-## 11. 从对象模型定位源码
-
-C++ 中 `Operation *` 表示通用节点；`arith::AddIOp`、`func::FuncOp` 等是面向某种操作的类型化包装，提供有语义的访问器。它们不是与 Operation 并存的另一份 IR。类型检查/cast 后，仍在访问同一个底层节点。
-
-| 要确认的关系 | 入口 | 本次要读到的程度 |
-|---|---|---|
-| Op 属于哪个 Block、拥有哪些 Region | `Operation.h`：`getBlock`、`getRegions` | 对照容器图理解访问方向 |
-| Region 拥有哪些 Block、父 Op 是谁 | `Region.h`：`getBlocks`、`getParentOp` | 区分父对象与控制流目标 |
-| Block 参数与操作列表 | `Block.h`：`getArguments`、`getOperations` | 参数不在 Operation 列表里 |
-| 某种 Op 的结构限制 | 相应 `.td` 中 operands/results/regions/traits | 将通用容器与具体约束对应 |
-
-以后做 IR 变换时，移动/删除节点、克隆 Region 和替换 Value 都需要维护引用与作用域。本章建立这些操作必须尊重的结构；具体 C++ 生命周期和 builder 用法在实现阶段展开。
-
-## 12. 阅读完成标准
-
-能够独立解释下面的结构，再进入 Value/SSA：
-
-1. 一个没有分支的函数为什么依然有 Region 和 Block。
-2. 一个循环为什么可以作为 Operation，出现在函数 Block 中，并拥有自己的 Region 和 Block。
-3. `func.call` 为什么引用函数定义，却不拥有被调用函数体。
-4. 同样有一个 Block，为什么 module 与函数体不能都解释为顺序执行？
-5. parser/printer 的输入输出是什么？打印名字改变，为什么不能据此判断数据依赖改变？
-
-<details>
-<summary>检查提示</summary>
-
-没有条件分支仍需入口 Block；循环的内部程序由它拥有的 Region 容纳；call 通过符号引用 callee。Region 的种类和父 Op 的契约决定解释方式，文本名字只是在打印时引用 Value 的表示。
-
-</details>
-
-## 源码与验证依据
-
-- [LLVM 20.1.8 LangRef](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/docs/LangRef.md)：Operation、Region、Block 与不同关系的定义。
-- [FuncOps.td](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/include/mlir/Dialect/Func/IR/FuncOps.td)：函数定义、调用、入口 Block 参数与隔离约束。
-- [SCFOps.td](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/include/mlir/Dialect/SCF/IR/SCFOps.td)：for/if 的 Region 和 Block 约束。
-- [Operation.h](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/include/mlir/IR/Operation.h)、[Region.h](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/include/mlir/IR/Region.h)：需要读实现时，从 Region 访问与 Block 列表开始。
-
-完整模块参与解析、verifier 和通用打印往返检查；结构树和流程图不是可执行输入。Graph/module 的具体约束还应对照 [BuiltinOps.td](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/include/mlir/IR/BuiltinOps.td)，Context/Block 的入口为 [MLIRContext.h](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/include/mlir/IR/MLIRContext.h) 与 [Block.h](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/include/mlir/IR/Block.h)。
-
-下一章：[Value、SSA 与支配关系](./values_ssa)。
+接着读[Value、SSA 与支配关系](./values_ssa)，讨论一个值能在哪些位置被合法使用。

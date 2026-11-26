@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="620" height="245" viewBox="0 0 620 245" role="img" aria-labelledby="title desc">
+<title id="title">4×4 存储中的一个 2×2 视图</title><desc id="desc">绿色格子标出原分配中的元素偏移，右侧是窗口坐标。</desc>
+<defs><marker id="tip" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M1 1 L8 4.5 L1 8" fill="none" stroke="#465d71" stroke-width="1.7"/></marker></defs>
+<rect x="1" y="1" width="618" height="243" rx="8" fill="#fafbfd" stroke="#ccd5df"/>
+<g font-family="system-ui, sans-serif" fill="#182c42">
+<text x="24" y="30" font-size="18" text-anchor="start" font-weight="600">源存储中的元素偏移</text>
+<text x="428" y="30" font-size="18" text-anchor="middle" font-weight="600">窗口 W 的逻辑坐标</text>
+<rect x="24" y="50" width="49" height="39" rx="5" fill="#eef0f4" stroke="#8293a3"/>
+<text x="48.5" y="75.5" font-size="17" text-anchor="middle" font-weight="400">0</text>
+<rect x="75" y="50" width="49" height="39" rx="5" fill="#eef0f4" stroke="#8293a3"/>
+<text x="99.5" y="75.5" font-size="17" text-anchor="middle" font-weight="400">1</text>
+<rect x="126" y="50" width="49" height="39" rx="5" fill="#eef0f4" stroke="#8293a3"/>
+<text x="150.5" y="75.5" font-size="17" text-anchor="middle" font-weight="400">2</text>
+<rect x="177" y="50" width="49" height="39" rx="5" fill="#eef0f4" stroke="#8293a3"/>
+<text x="201.5" y="75.5" font-size="17" text-anchor="middle" font-weight="400">3</text>
+<rect x="24" y="92" width="49" height="39" rx="5" fill="#eef0f4" stroke="#8293a3"/>
+<text x="48.5" y="117.5" font-size="17" text-anchor="middle" font-weight="400">4</text>
+<rect x="75" y="92" width="49" height="39" rx="5" fill="#daf0e7" stroke="#8293a3"/>
+<text x="99.5" y="117.5" font-size="17" text-anchor="middle" font-weight="400">5</text>
+<rect x="126" y="92" width="49" height="39" rx="5" fill="#daf0e7" stroke="#8293a3"/>
+<text x="150.5" y="117.5" font-size="17" text-anchor="middle" font-weight="400">6</text>
+<rect x="177" y="92" width="49" height="39" rx="5" fill="#eef0f4" stroke="#8293a3"/>
+<text x="201.5" y="117.5" font-size="17" text-anchor="middle" font-weight="400">7</text>
+<rect x="24" y="134" width="49" height="39" rx="5" fill="#eef0f4" stroke="#8293a3"/>
+<text x="48.5" y="159.5" font-size="17" text-anchor="middle" font-weight="400">8</text>
+<rect x="75" y="134" width="49" height="39" rx="5" fill="#daf0e7" stroke="#8293a3"/>
+<text x="99.5" y="159.5" font-size="17" text-anchor="middle" font-weight="400">9</text>
+<rect x="126" y="134" width="49" height="39" rx="5" fill="#daf0e7" stroke="#8293a3"/>
+<text x="150.5" y="159.5" font-size="17" text-anchor="middle" font-weight="400">10</text>
+<rect x="177" y="134" width="49" height="39" rx="5" fill="#eef0f4" stroke="#8293a3"/>
+<text x="201.5" y="159.5" font-size="17" text-anchor="middle" font-weight="400">11</text>
+<rect x="24" y="176" width="49" height="39" rx="5" fill="#eef0f4" stroke="#8293a3"/>
+<text x="48.5" y="201.5" font-size="17" text-anchor="middle" font-weight="400">12</text>
+<rect x="75" y="176" width="49" height="39" rx="5" fill="#eef0f4" stroke="#8293a3"/>
+<text x="99.5" y="201.5" font-size="17" text-anchor="middle" font-weight="400">13</text>
+<rect x="126" y="176" width="49" height="39" rx="5" fill="#eef0f4" stroke="#8293a3"/>
+<text x="150.5" y="201.5" font-size="17" text-anchor="middle" font-weight="400">14</text>
+<rect x="177" y="176" width="49" height="39" rx="5" fill="#eef0f4" stroke="#8293a3"/>
+<text x="201.5" y="201.5" font-size="17" text-anchor="middle" font-weight="400">15</text>
+<rect x="316" y="75" width="109" height="43" rx="5" fill="#daf0e7" stroke="#8293a3"/>
+<text x="370.5" y="102.5" font-size="15" text-anchor="middle" font-weight="400">W[0,0] → 5</text>
+<rect x="431" y="75" width="109" height="43" rx="5" fill="#daf0e7" stroke="#8293a3"/>
+<text x="485.5" y="102.5" font-size="15" text-anchor="middle" font-weight="400">W[0,1] → 6</text>
+<rect x="316" y="126" width="109" height="43" rx="5" fill="#daf0e7" stroke="#8293a3"/>
+<text x="370.5" y="153.5" font-size="15" text-anchor="middle" font-weight="400">W[1,0] → 9</text>
+<rect x="431" y="126" width="109" height="43" rx="5" fill="#daf0e7" stroke="#8293a3"/>
+<text x="485.5" y="153.5" font-size="15" text-anchor="middle" font-weight="400">W[1,1] → 10</text>
+<text x="420" y="205" font-size="16" text-anchor="middle" font-weight="400">向右跨 1 个元素，向下跨 4 个</text>
+</g></svg>

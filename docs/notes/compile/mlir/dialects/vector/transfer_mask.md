@@ -1,7 +1,7 @@
 ---
 order: 20
 title: Transfer、Mask 与边界
-updated: 2026-10-04
+updated: 2026-11-24
 ---
 
 # Transfer、Mask 与边界
@@ -38,7 +38,7 @@ scf.for %i = %c0 to %n step %c4 {
 }
 ```
 
-省略 `in_bounds` 表示不能预先假定这些向量维度都在界内。transfer 的语义要求处理可能越界的部分，具体检查或屏蔽方式由降低选择。最后一次的推演是：
+省略 `in_bounds` 时，transfer 需要处理可能越界的向量部分，lowering 再选择检查或屏蔽方式。最后一次可推演为：
 
 ```text
 读取： [8, 9, 0, 0]     末两项来自 padding，并未读取 x[10:12]
@@ -47,9 +47,13 @@ scf.for %i = %c0 to %n step %c4 {
 写入： y[8]=18，y[9]=20；末两项不写入
 ```
 
-无效 lane 里的 `2` 是正常的局部计算结果。安全性来自它们没有被写到越界位置，而不是必须让无效 lane 永远保持零。
+无效 lane 在局部计算后也可以得到 `2`。写回时屏蔽这些 lane，就能避免越界访问。
 
 但若下一步要对四项求和，这两个 `2` 就会影响答案。padding 必须和后续算法一起考虑：加法归约常用零，最大值归约常用负无穷；如果 padding 又经历了变换，可能要在归约前重新屏蔽。不能把“内存安全”当成“数值一定正确”。
+
+![向量尾块：参与计算的 lane 不一定参与访存](./images/tail-lanes.svg)
+
+最后一组仍有四个向量元素，但只有前两项来自有效地址。padding 经计算可以变成非零数；只要对应写入仍被屏蔽，就不会访问输出的越界位置。若再做归约，则还需排除无效 lane 的贡献。
 
 ## 3. 显式 Mask
 
@@ -60,7 +64,7 @@ scf.for %i = %c0 to %n step %c4 {
 %mask = vector.create_mask %left : vector<4xi1>
 ```
 
-`create_mask` 将前 `min(max(left,0),4)` 个位置设为 true。`left=10` 得到 `[true,true,true,true]`，`left=2` 得到 `[true,true,false,false]`。固定宽度下，剩余数超过 4 并不会生成更长向量。
+`create_mask` 将前 `min(max(left,0),4)` 项设为 true：`left=10` 得到四个 true，`left=2` 得到两个 true 和两个 false，结果宽度始终为 4。
 
 用它进行显式受控访问：
 
@@ -74,11 +78,11 @@ vector.maskedstore %y[%i], %mask, %b
 
 这里 `%zeros` 是整条向量，给未读取的位置提供 pass-through 值。**maskedload/store 不会替你证明 mask 正确。** 所有置 true 的 lane 都必须对应合法地址；把最后一块的 mask 写成全 true，会重新引入越界访问。
 
-`vector.mask` 是另一种写法：它用一个 Region 包住支持 MaskableOpInterface 的操作，例如 transfer 或归约，把有效 lane 集合传给该操作。它不是一个能够随意包住任何副作用代码的通用 if。自动向量化篇会展示真实生成的这种形式。
+`vector.mask` 用 Region 包住支持 MaskableOpInterface 的操作，将有效 lane 集合传给它，例如 transfer 或归约。自动向量化篇会展示这种形式的生成过程。
 
 ## 4. `in_bounds` 与维度映射
 
-当完整小块确定在界内，可以标记 `in_bounds = [true]`，让 lowering 不必再为这个维度生成额外边界处理。这个标记是编译器依赖的保证，不是让非法地址变合法的开关。
+若已证明整个小块在界内，可以设置 `in_bounds = [true]`。lowering 随后利用这个条件，省去该维度的额外边界处理。
 
 如果已用正确 mask 排除了所有无效 lane，生成的 transfer 也可能标记 `in_bounds=true`。此时保证针对实际参与访问的部分；不能删掉 mask 后继续沿用同一保证。
 
@@ -90,9 +94,9 @@ vector.maskedstore %y[%i], %mask, %b
   : memref<?x?xf32>, vector<4xf32>
 ```
 
-映射表示向量位置沿列 `j` 变化；`row` 固定。padding 可以处理被向量化的列维度尾部，但 **固定的行必须有效**。它不是整个二维地址空间的越界兜底机制。
+映射让向量位置沿列 `j` 变化，并固定 `row`。padding 处理向量化列的尾部；固定行的有效性需要在访问前保证。
 
-如果映射改成 `(i,j)->(i)`，向量位置就沿行变化，访问步长通常也随之改变。Vector 内部连续的 lane 不保证来源内存连续。这会直接影响生成连续 load、标量 gather，还是目标专用操作。
+若映射改为 `(i,j)->(i)`，lane 就沿行变化，来源地址的步长也随之改变。这种访问关系会影响 lowering 选择连续 load、标量 gather 或目标专用操作。
 
 ## 5. 完整块与标量余块
 
@@ -117,4 +121,4 @@ vector.maskedstore %y[%i], %mask, %b
 
 下一篇讨论[归约、收缩与目标形态](./reduction_contract)。实际把 Linalg 变成 mask/transfer 的过程见[向量化](../../compiler/optimization/vectorization)。
 
-LLVM 20.1.8 核验包含五种实现、11 个长度（含 0、1、3、4、10、1025）、所有输出、输入保持与输出保护区；不是对任意地址和所有浮点输入的形式证明。契约见 [VectorOps.td](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/include/mlir/Dialect/Vector/IR/VectorOps.td)。[15 实验](https://github.com/jnfkdsn/aicompiler/tree/main/llvm-mlir/15-vector-transform)可观察具体输入与尾块结果。
+契约见 LLVM 20.1.8 的 [VectorOps.td](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/include/mlir/Dialect/Vector/IR/VectorOps.td)。[配套实验](https://github.com/jnfkdsn/aicompiler/tree/main/llvm-mlir/15-vector-transform)展示不同长度下的尾块计算与写回，可用 0、1、3、4、10 等长度观察边界行为。

@@ -1,7 +1,7 @@
 ---
 order: 2
 title: C++ IR API：从读取对象到安全地修改 IR
-updated: 2026-09-13
+updated: 2026-11-24
 ---
 
 # C++ IR API：从读取对象到安全地修改 IR
@@ -10,7 +10,7 @@ updated: 2026-09-13
 
 本章继续使用 `twice`，先把加零变成直接使用参数，再将剩下的 `x+x` 改写成 `x*2`，最后用同一段函数解释构造和克隆。选择第二条变换是为了同时观察“创建新 IR”和“删除旧 IR”，不据此判断某个目标上乘法一定更快。
 
-正文中的主要 C++ 片段来自一个已经编译运行的独立程序。它直接调用 IR API，尚未包装成 Pass；这样可以先集中理解修改本身，注册、pipeline 集成和正式测试工程放在后面的贯通教程。只需要先理解轻量句柄、引用、模板调用和 RAII 的基本含义，不要求读完所有 MLIR C++ 类。
+本章用一个独立 C++ 程序操作 IR，依次观察创建、引用替换和删除。程序使用轻量句柄、引用、模板调用与 RAII；后面的贯通教程再把这些修改接入 Pass 和 pipeline。
 
 本章的学习目标是能预测操作对象和引用关系的变化，并判断一次修改是否安全。方法名和重载参数可以边写边查；能说明“需要重接两个 operand，旧结果无 use 后才能考虑删除”，比脱离场景记住 RAUW 的拼写更重要。C++ 是表达这些修改的工具，语法不熟的部分可以单独查阅，不必因此停下整条学习主线。
 
@@ -73,7 +73,7 @@ Context 还管理 uniqued 的 Type、Attribute 等存储。在同一个 Context 
 
 `parseSourceFile<ModuleOp>` 返回 `OwningOpRef<ModuleOp>`。它是拥有顶层操作的 RAII 对象，离开作用域时销毁 module 及其子结构。这里先声明 Context，再声明 module，C++ 按相反顺序析构，IR 因而在 Context 之前释放。
 
-接下来可以用 `module->lookupSymbol<func::FuncOp>("twice")` 查找函数。这个名字是符号，不是 SSA 临时名字；它保存在 IR 中，有明确的符号表语义。配套程序会检查函数存在、非声明、只有一个 Block，签名为 `(i32) -> i32`，再使用本章代码。
+用 `module->lookupSymbol<func::FuncOp>("twice")` 可以按符号名查找函数。配套程序确认函数存在且包含一个 Block，签名为 `(i32) -> i32` 后，再执行下面的操作。
 
 需要区分以下几种 C++ 表达：
 
@@ -86,15 +86,15 @@ Context 还管理 uniqued 的 Type、Attribute 等存储。在同一个 Context 
 | `Type` / `Attribute` | 对 Context 管理的存储的句柄 | 依赖所属 Context 的生命周期 |
 | `OwningOpRef<ModuleOp>` | 对顶层操作的拥有关系 | 析构时释放所持有的 IR |
 
-因此，`auto another = add;` 不会生成第二条加法；`add.erase()` 之后，`another` 也不能再解引用。句柄仍然保存着地址，不意味着地址对应的对象还活着。
+auto `another` = add 复制句柄，两者指向同一操作。`add.erase()` 删除该对象后，两个句柄都失效，后续应从存活 IR 重新取得需要的对象。
 
 ## 3. 带类型的 Op 如何连接通用 Operation
 
-通用遍历拿到 `Operation *raw` 后，可以用 `dyn_cast<arith::AddIOp>(raw)` 判断它是否是加法，并取得对应句柄。`dyn_cast` 不匹配时返回空句柄；`cast` 用于已经确信类型匹配的情况，不应代替对任意输入的检查；`isa` 只回答是否匹配。
+通用遍历得到 `Operation *raw` 后，`dyn_cast<arith::AddIOp>(raw)` 会检查类型并返回对应句柄，失败时返回空句柄。已确认类型时可用 `cast`，只需要布尔判断时可用 `isa`。
 
-这里使用 LLVM/MLIR 的类型识别机制，不是 C++ 的 `dynamic_cast`。`arith::AddIOp` 提供 `getLhs()`、`getRhs()`、`getResult()` 等符合这个操作定义的访问器，底层仍然是同一个 Operation。
+这些转换使用 LLVM/MLIR 的类型识别机制。取得 `arith::AddIOp` 句柄后，可以通过 `getLhs()`、`getRhs()`、`getResult()` 访问底层同一个 Operation 的字段。
 
-对这个单结果二元操作，`add.getLhs()` 对应 operand 0，`add.getResult()` 对应 result 0。换成多结果操作时，要明确使用哪个结果；不能把“一个 Op”普遍当成“一个 Value”。尤其 `func.func` 自身通常没有 SSA 结果，函数的返回类型由 FunctionType 描述，返回值通过函数体里的 `func.return` 传递。
+对这个单结果二元操作，`getLhs()` 对应 operand 0，`getResult()` 对应 result 0。多结果操作需要指定结果编号。`func.func` 通常没有自身的 SSA 结果；其 FunctionType 描述函数返回类型，函数体中的 `func.return` 提供运行时返回的值。
 
 下面的片段一次走通结构和数据两条路径。`fn` 是已经检查过的函数句柄：
 
@@ -124,9 +124,9 @@ llvm::errs() << "x_uses=" << uses << " x_unique_users="
              << uniqueUsers.size() << "\n";
 ```
 
-`fn.walk([](arith::AddIOp add) { ... })` 递归访问函数中所有匹配类型的操作，包括嵌套 Region 中的加法。若只想看当前 Block 直接包含的加法，可以使用 `entry.getOps<arith::AddIOp>()`。两者的范围不同，不能把后者当作递归查询。
+`fn.walk([](arith::AddIOp add) { ... })` 递归访问函数及嵌套 Region 内的加法；`entry.getOps<arith::AddIOp>()` 则枚举入口 Block 直接包含的加法。按所需范围选择遍历方式。
 
-`%x` 是 BlockArgument，所以 `x.getDefiningOp()` 返回空；它不是“没有合法定义”。对于加法的结果，该 API 才返回对应的定义操作。这也解释了为什么通用代码遇到空 defining op 后，应进一步按 BlockArgument 处理，而不是立即报错。
+`%x` 定义在入口 Block 的参数位置，因此属于 BlockArgument，`getDefiningOp()` 返回空。加法结果属于 OpResult，该方法返回对应加法。通用代码可以据此继续区分这两类定义来源。
 
 `std::distance` 在这里用于统计 use 链表，适合观察小例子；若只关心是否无使用者或只有一个 use，应使用 `use_empty()`、`hasOneUse()`，不必每次遍历计数。
 
@@ -142,7 +142,7 @@ Value x
 
 一个 `OpOperand` 就是某个 Operation 的一个输入槽位。它知道自己属于哪个操作、位于第几个槽位，以及当前引用哪个 Value。Value 的 use-list 将引用它的这些槽位连接起来。
 
-所以 `getUses()` 返回的是使用边，`getUsers()` 沿这些边返回对应操作，后者不保证去重。上面的观察代码使用集合统计不同的 user；对简化后的程序，实际输出包含：
+`getUses()` 遍历使用边，`getUsers()` 沿每条边返回使用者，因此同一个操作可能出现多次。下面用集合统计不同的 user，简化后得到：
 
 ```text
 argument_has_defining_op=0
@@ -178,7 +178,7 @@ for (arith::AddIOp add : candidates) {
 }
 ```
 
-前半段是适用范围：本例只处理标量 signless i32、无 overflow flags、右操作数由整数零常量定义的加法。这个限制让当前程序的证明范围明确；它不是完整的加零 canonicalization，也不处理所有等价的常量表达方式。
+匹配部分限定了这条规则的适用范围：标量 signless i32、无 overflow flags，并且 RHS 直接由整数零常量定义。遇到其他类型或更复杂的常量表达式时，代码保留原操作。
 
 真正改变数据图的是 `replaceAllUsesWith`，通常缩写为 RAUW。处理第一条加法时，变化可以分成两个时刻：
 
@@ -201,9 +201,23 @@ module {
 }
 ```
 
-这份 IR 通过 verifier。合法性不要求每条常量都有用途，优化清理也不会因为我们调用了一次 RAUW 就自动完成。
+这份 IR 通过 verifier。此时无用常量仍保留在 Block 中，后续可以通过清理过程删除。
 
 在本例中，替换前的加法已经合法，`%x` 在函数入口定义，支配这些使用，替换前后类型也相同；`x+0=x` 则提供语义依据。这些才是允许替换的理由。RAUW 本身不会帮调用者证明这些条件。
+
+<div style="background: white; padding: 0.6rem; border-radius: 6px;">
+
+<div class="source-figure">
+
+![Value 的 First Use 指向一个 OpOperand，每个 nextUse 再连到下一个使用位置](../../images/llvm/Use-list.svg)
+
+</div>
+
+</div>
+
+图源：[LLVM 20.1.8：Understanding the IR Structure](https://mlir.llvm.org/docs/Tutorials/UnderstandingTheIRStructure/#traversing-the-def-use-chains)。
+
+沿官方图中的 `First Use` 和 `nextUse` 走一遍。下排的每个格子都是一个操作数位置。即使两个位置属于同一条加法，也必须分别改接，才能替换这个值的全部使用。图中的 `back` 供维护链表使用。
 
 ## 6. 从 use-list 源码看 RAUW 的能力边界
 
@@ -216,7 +230,7 @@ while (!use_empty())
 
 这是 `IR/UseDefLists.h` 中实现的核心摘录。每次把链表中的一个 use 转接出去，直到旧值没有 use。这里没有搜索等价表达式，没有插入类型转换，也没有计算 DominanceInfo。
 
-“旧值没有 use”并不等于删除了原来的 operand 槽位。例如 `%r = addi %a, %a` 改成 `%r = addi %x, %x`，`%r` 仍然有两个输入槽位；它们从引用 `%a` 改为引用 `%x`。改变的是 use 的目标，不是删除使用者或它的输入。
+RAUW 后，`%r` 仍有两个 operand 槽位，只是都从引用 `%a` 改为引用 `%x`。因此 `%a` 的 use-list 变空，`%x` 的 use-list 增加两项，使用者 `%r` 本身继续存在。
 
 由这段逻辑还能推导一个常见错误。假设原来有 `%old`，先创建 `%new = addi %old, %one`，再无条件把 `%old` 的所有 uses 换成 `%new`。新增加法使用 `%old` 的槽位也会被替换，结果成为：
 
@@ -231,7 +245,7 @@ while (!use_empty())
 - **替换原计算**：像下一节从 `x+x` 构造 `x*2`，新操作使用旧操作的输入，不使用旧结果。新结果能够替代旧结果后，执行 RAUW，再删除旧操作。
 - **在旧结果上增加计算**：新操作确实需要 `%old`，就必须保留这条依赖，只重接选定的下游使用。固定版本提供 `oldValue.replaceAllUsesExcept(newValue, newOp)`，也可以用 `replaceUsesWithIf` 选择 use。此时旧结果仍被新操作使用，不能再删除旧定义。
 
-第二种做法只解决引用连接的问题。仍要证明新增计算符合所需语义，并确保新定义支配被替换的使用。不能把“排除一个 user”当作任何变换都合法的通用补丁。
+第二种做法控制了哪些使用位置被替换。新增计算的语义、类型和支配关系仍由调用者检查，确保替换后的每个使用都能取得正确的值。
 
 类似地，`Value::setType(i64)` 只改类型记录，不会插入扩展/截断，不会同步改写全部用户和函数签名。需要改变表示类型时，应构造满足新类型关系的 IR；系统性的类型变化随后交给 Dialect Conversion 和 TypeConverter 讨论。
 
@@ -278,13 +292,13 @@ return %r              %m = muli %x, %two            %m = muli %x, %two
 
 创建 `%m` 时不会自动删除 `%r`。只有把 `%r` 的 use 转向 `%m` 后，才能删除原加法。乘法使用 `%x` 和 `%two`，没有使用旧结果 `%r`，因此也没有上一节的自引用问题。
 
-`builder.create<arith::MulIOp>(...)` 使用该 Op 的 builder 填充操作状态，并创建、插入 Operation。对这个操作，结果类型可以由输入推导；这不等于所有 Op 都不需要显式结果类型，也不等于 `create` 会调用完整 verifier。普通 `create` 也不会自动运行 canonicalization；`createOrFold` 是具有额外折叠行为的另一组 API。
+`builder.create<arith::MulIOp>(...)` 调用该 Op 的 builder 填充状态，再创建并插入 Operation。本例的结果类型由输入推导；其他 Op 按自己的 builder 要求提供类型。构造完成后可显式调用 verifier；需要构造时尝试折叠，则使用 `createOrFold`。
 
 常量的整数值 `2` 是 Attribute 层面的静态信息，常量操作的结果 `%two` 才是供乘法使用的 SSA Value。这是前面 Type/Attribute 概念在构造代码中的具体区别。
 
 `Location` 传给新操作，用于把后续诊断关联到原始程序位置。这里沿用被改写加法的 location；更复杂的合并可能需要 FusedLoc 等表示，location 本身不决定支配或算术语义。
 
-`InsertionGuard` 保存并恢复 builder 的插入点，避免辅助函数意外改变调用者的后续插入位置。它不是 IR 事务：不会删除刚创建的操作，不会回滚 RAUW，也不能让已经被删除的插入锚点重新有效。本例的局部 builder 初始没有插入点，guard 退出时恢复这个状态。
+`InsertionGuard` 在进入作用域时保存插入点，在退出时恢复它，适合保护辅助函数对 builder 状态的临时修改。创建、RAUW 和删除已经改变的 IR 会保留下来，插入锚点的生命周期也需由调用者维护。本例局部 builder 初始没有插入点，退出时恢复该状态。
 
 ## 8. 插入成功为什么仍会验证失败
 
@@ -304,7 +318,7 @@ operand #1 does not dominate this use
 
 这表明 builder 的插入点只表达位置选择，不承担合法性证明。对于当前直线程序，把新定义放在旧加法之前，并保证新定义的输入已经可用，足以满足这里的支配要求。
 
-对同一 Block 中的普通操作，可以先用“输入的定义 → 新操作 → 被它替换的使用”检查顺序。这里前半段是输入的 **definition**，不是输入的 use。跨 Block 时，文本上排在前面仍可能只在某条分支执行，必须改用支配关系判断，并考虑 Region 的作用域与隔离约束。
+同一 Block 内，可以沿“输入定义 → 新操作 → 结果使用”检查顺序。跨 Block 时，需要确认输入定义支配新操作、新操作支配被替换的使用，并满足 Region 作用域和隔离约束。
 
 到了有分支或 Region 的程序，需要同时考虑替代值能否到达所有使用、是否越过隔离边界、操作移动后是否改变执行次数和效果。`moveBefore` / `moveAfter` 移动的是已有对象，不会像 `clone` 那样生成新定义；但这些移动 API 同样不会替你证明支配、效果或循环不变量。
 
@@ -323,7 +337,7 @@ llvm::outs() << "\n";
 return 0;
 ```
 
-失败时打印的是已经修改的 IR，函数返回并不会恢复旧版本。这与上一章 Pass 失败不意味着回滚的观察一致。Verifier 检查 IR 约束；一个类型、支配都合法但把 `x+x` 错写成 `x*3` 的程序，仍然可能通过 verifier，所以变换语义还需要独立推理与行为测试。
+失败时打印的是已修改的 IR；函数返回后，这些修改仍然保留。Verifier 检查结构、类型和支配等约束。若把 `x+x` 写成类型正确的 `x*3`，这些检查可能通过，因此还需要通过推导和行为测试检查计算是否保持原意。
 
 ## 9. 删除操作也会改变你正在遍历的容器
 
@@ -340,11 +354,11 @@ for (Operation &op : llvm::make_early_inc_range(entry)) {
 }
 ```
 
-`make_early_inc_range` 在处理当前对象之前推进迭代器，因此可以删除当前对象。它不能让“顺手删除下一个对象”也变安全。这里故意只清理入口 Block 的常量，既不是递归 DCE，也不是不动点算法。
+`make_early_inc_range` 在处理当前对象前推进迭代器，允许回调删除当前对象；接下来要访问的对象仍须保持有效。本例用它扫描入口 Block 并删除无用常量。
 
 `isOpTriviallyDead` 结合操作可删除性与结果使用情况提供判断，不能用“没有结果”替代它。`Operation::erase()` 则负责脱离父 Block 并销毁对象，包括其子结构；`remove()` 只脱离父 Block，不销毁。若只想移动位置，优先用移动 API，避免留下无人管理的 detached operation。
 
-对 `walk`，固定版本提供了明确的删除协议：默认后序遍历允许在回调中删除当前操作；前序遍历删除当前操作后需要返回 `WalkResult::skip()`。这不授权任意删除仍在遍历路径上的祖先或其他节点。选择遍历策略时，要把“谁会被删除”算进算法，而不是只考虑怎样找到匹配项。
+默认后序 `walk` 允许回调删除当前操作；前序遍历删除当前操作后，要返回 `WalkResult::skip()`，让遍历跳过已经删除的子结构。选择删除范围时，还需保留遍历继续进行所依赖的其他节点。
 
 清理之后，`rewrite` 模式的实际输出为：
 
@@ -387,13 +401,13 @@ builder.create<func::ReturnOp>(loc, sum.getResult());
 
 这里在 module 的 body 末尾插入函数是合法的：`builtin.module` 不需要额外的终结操作。对于已经有 `func.return` 的函数 Block，“末尾插入”则意味着放在 return 之后，通常会破坏 terminator 必须位于末尾的约束；应选择在 terminator 之前插入。代码里在新建的空 Block 起点插入，再依次建立加法和 return，最后才验证完整 module。
 
-builder 允许程序经历尚未构造完整的中间状态。因此既不能期待每次 `create` 都验证完整函数，也不能在缺少 terminator 等必要结构时就把临时状态当作最终合法 IR。
+Builder 支持逐步构造：可以先建立 Block 和操作，再补 terminator。完整结构就绪后，再调用 verifier 检查最终 IR。
 
 ## 11. 克隆函数体：复制对象时要重建哪些引用
 
 最后将原函数的 body 复制到新函数 `@twice_copy`。假设两者签名相同，分别具有入口参数 `%x_old` 和 `%x_new`。
 
-如果只复制加法对象，却保留加法原来引用的 `%x_old`，新函数就会引用另一个函数里的局部 Value。文本看起来都叫 `%arg0` 并不能挽救这个关系：它们属于不同 Block。
+若复制加法时仍引用 `%x_old`，新函数就会使用旧函数的局部参数，违反作用域。即使 printer 把两者都打印成 `%arg0`，它们仍是不同 Block 中的对象，需要通过映射连接到新参数。
 
 `IRMapping` 明确记录旧对象到新对象的对应。这里完整复制一个单 Block body，包括 return；正常执行时 `omitArgumentMapping=false`：
 
@@ -434,7 +448,7 @@ using value defined outside the region
 
 这是新函数违反隔离约束的表现。正常克隆则通过验证，两个函数分别引用各自的入口参数。
 
-本例复制的是签名与单 Block body，没有声称完整复制所有函数属性、参数属性或多 Block CFG。一般 CFG 克隆还涉及 Block 与 successor 映射；完整 Op/Region 的克隆设施会处理其内部结构映射，调用者仍需处理外部引用。符号引用也不同于 SSA operand：复制带符号定义的操作后，名称唯一性和符号用途需要 SymbolTable 等机制维护，不能靠一个 Value mapping 解决。
+本例克隆函数签名与单 Block body。扩展到多 Block CFG 时，还要映射 Block 和 successor；复制完整函数时，要保留相关属性。Op/Region 的克隆设施处理内部结构映射，调用方负责外部引用。若涉及符号定义，则由 SymbolTable 等机制维护名称唯一性和符号用途。
 
 ## 12. 这些 API 怎样进入下一章的改写框架
 
@@ -442,7 +456,7 @@ using value defined outside the region
 
 当同样的变换进入 PatternRewriter，driver 可能维护待处理操作、监听修改并更新工作表。若绕过 rewriter 直接 `erase()` 或修改 operand，它可能不知道对象已经变化。下一章因此需要在本章的对象机制之上建立统一的修改协议：怎样表达匹配失败，怎样通知替换与删除，以及 driver 怎样继续处理受影响的操作。
 
-进入 Pass 后，还要遵守上一章的操作范围和分析 preservation 契约。IR API 是底层能力，并不会因为调用位置换成 `runOnOperation()`，就自动更新所有缓存、保证所有改写合法。
+进入 Pass 后，修改还需要符合该 Pass 的操作范围，并按实际影响声明哪些分析可以保留。这样，后续 Pass 才能查询有效的分析结果。
 
 本章给出的独立程序只访问指定的 `@twice`，示范两条受约束规则。单次扫描是否足够取决于规则间的关系；扩展更多规则后，新的操作可能需要再次匹配，遍历顺序也可能影响暴露的机会。这正是后面引入改写 driver 的具体动机。
 
@@ -457,25 +471,15 @@ using value defined outside the region
 
 ## 依据与复现
 
-学习观察入口在 `aicompiler-labs/llvm-mlir/03-ir-api/README.md`。从 workspace 根目录运行：
+[IR API 观察实验](https://github.com/jnfkdsn/aicompiler/tree/main/llvm-mlir/03-ir-api)提供分步操作。可从 workspace 根目录运行：
 
 ```bash
 python3 aicompiler-labs/llvm-mlir/03-ir-api/observe.py
 ```
 
-默认只处理一次加零，分别打印 RAUW 前、RAUW 后但尚未删除、erase 后的实际 IR 和使用关系；`--step rewrite` 展示完整改写与 diff，`--step dominance` / `--step clone` 对照合法与非法修改。先预测再运行，随后修改该实验目录的输入验证预测。下面的 `validate_ir_api.py` 是编写者的回归检查，终端的通过计数不能替代这一观察过程。
+默认观察一次加零消除，依次打印 RAUW 前、RAUW 后以及 erase 后的 IR 和使用关系。`--step rewrite` 展示完整改写，`--step dominance` 和 `--step clone` 对照合法与非法修改。可以改变输入，比较 use-list 和输出结构怎样变化。
 
 本文以工作区 `llvmorg-20.1.8` 为准。正文 C++ 片段与 `aicompiler-labs/llvm-mlir/docs/ir_api/ir_api_demo.cpp` 中对应区域逐字核对；省略的部分是头文件、模式分发、输入形状检查和主函数组织。
-
-在 workspace 根目录运行维护检查：
-
-```bash
-python3 aicompiler-labs/llvm-mlir/docs/validate_ir_api.py
-```
-
-脚本构建独立 C++ 工具，提取本章完整 MLIR 示例，核对打印结果、use/user 差异、两条改写及不匹配输入、构造和克隆结果，并检查错误插入位置与缺少参数映射的诊断。生成物位于 `artifacts/builds/mlir-ir-api-docs/` 与 `artifacts/logs/mlir-docs/<日期>-ir-api/`。这些是编写者的验证材料；学习者尚未因此完成独立 C++ 实验。
-
-这里实际运行的是操作 IR 的 C++ 编译器程序，生成的 `@twice` 尚未通过本脚本 lower 成机器码执行，也没有性能结论。模块通过 verifier 和往返解析，与算子数值测试是不同证据。
 
 主要源码路径：
 
@@ -486,3 +490,7 @@ python3 aicompiler-labs/llvm-mlir/docs/validate_ir_api.py
 - [ArithOps.td](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/include/mlir/Dialect/Arith/IR/ArithOps.td)：运算类型、访问器与 overflow flags 的定义来源。
 
 官方 [Understanding the IR Structure](https://mlir.llvm.org/docs/Tutorials/UnderstandingTheIRStructure/) 可以对照结构遍历与 def-use API；[Pattern Rewriting](https://mlir.llvm.org/docs/PatternRewriter/) 用于衔接下一章的修改协议。在线教程与固定版本存在差异时，优先核对本地头文件与实际运行结果。
+
+## 图片来源与许可
+
+- **Use-list 图**：来自 [LLVM Project 20.1.8](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/mlir/docs/includes/img/Use-list.svg)，采用 [Apache-2.0 WITH LLVM-exception](/licenses/llvm-20.1.8.txt)。原图未修改。

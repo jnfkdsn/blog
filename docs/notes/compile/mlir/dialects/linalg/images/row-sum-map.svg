@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="620" height="196" viewBox="0 0 620 196" role="img" aria-labelledby="title desc">
+<title id="title">同一行的三个迭代点投影到一个输出</title><desc id="desc">行索引 i 决定输出，列索引 j 决定读取的输入。</desc>
+<defs><marker id="tip" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M1 1 L8 4.5 L1 8" fill="none" stroke="#465d71" stroke-width="1.7"/></marker></defs>
+<rect x="1" y="1" width="618" height="194" rx="8" fill="#fafbfd" stroke="#ccd5df"/>
+<g font-family="system-ui, sans-serif" fill="#182c42">
+<text x="28" y="31" font-size="18" text-anchor="start" font-weight="600">迭代点读取 A[i,j]</text>
+<text x="490" y="31" font-size="18" text-anchor="middle" font-weight="600">输出位置 S[i]</text>
+<rect x="25" y="48" width="76" height="42" rx="5" fill="#e3edf8" stroke="#8293a3"/>
+<text x="63.0" y="75.0" font-size="17" text-anchor="middle" font-weight="400">A[0,0]</text>
+<rect x="115" y="48" width="76" height="42" rx="5" fill="#e3edf8" stroke="#8293a3"/>
+<text x="153.0" y="75.0" font-size="17" text-anchor="middle" font-weight="400">A[0,1]</text>
+<rect x="205" y="48" width="76" height="42" rx="5" fill="#e3edf8" stroke="#8293a3"/>
+<text x="243.0" y="75.0" font-size="17" text-anchor="middle" font-weight="400">A[0,2]</text>
+<path d="M290 69 H401" fill="none" stroke="#465d71" stroke-width="1.8" marker-end="url(#tip)"/>
+<rect x="410" y="48" width="170" height="42" rx="5" fill="#fff0d8" stroke="#8293a3"/>
+<text x="495.0" y="75.0" font-size="17" text-anchor="middle" font-weight="400">S[0] = 1+2+3</text>
+<rect x="25" y="121" width="76" height="42" rx="5" fill="#daf0e7" stroke="#8293a3"/>
+<text x="63.0" y="148.0" font-size="17" text-anchor="middle" font-weight="400">A[1,0]</text>
+<rect x="115" y="121" width="76" height="42" rx="5" fill="#daf0e7" stroke="#8293a3"/>
+<text x="153.0" y="148.0" font-size="17" text-anchor="middle" font-weight="400">A[1,1]</text>
+<rect x="205" y="121" width="76" height="42" rx="5" fill="#daf0e7" stroke="#8293a3"/>
+<text x="243.0" y="148.0" font-size="17" text-anchor="middle" font-weight="400">A[1,2]</text>
+<path d="M290 142 H401" fill="none" stroke="#465d71" stroke-width="1.8" marker-end="url(#tip)"/>
+<rect x="410" y="121" width="170" height="42" rx="5" fill="#fff0d8" stroke="#8293a3"/>
+<text x="495.0" y="148.0" font-size="17" text-anchor="middle" font-weight="400">S[1] = 4+5+6</text>
+</g></svg>

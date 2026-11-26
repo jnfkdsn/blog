@@ -1,7 +1,7 @@
 ---
 order: 5
 title: 解析与打印：文本和 IR 对象的对应
-updated: 2026-10-02
+updated: 2026-11-24
 ---
 
 # 解析与打印：文本和 IR 对象的对应
@@ -34,9 +34,13 @@ my.identity same %x {tag = "demo"} : i32
                    operand  属性字典    输入/结果类型
 ```
 
-same 只用于识别这项简洁写法，不需要在对象中再保存一个同名字段。`%x` 也不是对象里长期保存的字符串：解析后它对应函数参数的 Value，operand 引用这个 Value。
+same 是这项简洁语法的关键字。解析 `%x` 时，parser 找到对应的函数参数 Value，并让新操作的 operand 引用它。
 
 结果 `%r` 由新操作定义，后面的 return 使用它。解析器不会为了得到这个结果去执行一次 identity；这里建立的是表示与引用关系。
+
+![两种文本写法，对应同一份 IR 对象](./images/assembly-roundtrip.svg)
+
+两种语法最终描述相同的操作名、输入引用和结果类型。沿箭头读：parser 从文本建立对象；printer 从对象选择一种文本写法。图中省略属性等未在这个最小加法中使用的字段。
 
 ## 2. 声明式格式与手写入口
 
@@ -60,7 +64,7 @@ def IdentityOp : Op<My_Dialect, "identity", [Pure]> {
 }
 ```
 
-`hasCustomAssemblyFormat` 生成 parse/print 声明；作者负责实现它们。本章用手写方式展示过程，并不表示 identity 本身需要如此复杂的扩展。
+`hasCustomAssemblyFormat` 生成 parse/print 声明，具体方法由开发者实现。下面用 identity 的简单语法展示这两个方法怎样配合。
 
 无论代码来自生成器还是作者，任务相同：读入约定的语法，把语义需要的字段填入待构造状态。
 
@@ -79,7 +83,7 @@ def IdentityOp : Op<My_Dialect, "identity", [Pure]> {
 | 解析输入引用 | 找到函数参数 Value，确认类型对应 | 加入 operand 列表 |
 | 记录结果类型 | 一个 i32 结果 | 加入结果类型列表 |
 
-这份待构造状态在 C++ 中叫 `OperationState`。它尚不是一个已经插入 IR 的操作，也不是操作的 SSA 结果。解析方法准备好这些字段后，框架再据此创建 Operation 和它的结果。
+这些待构造字段保存在 `OperationState` 中。解析方法填好状态后，框架据此创建 Operation 及其结果。
 
 反方向打印时，顺序类似：写出关键字，从对象中取得输入引用，再写出额外属性和类型。因为读的是当前对象，printer 无需记住原来 `%x` 的拼写，使用 `%arg0` 也能保持相同引用关系。
 
@@ -108,11 +112,11 @@ void IdentityOp::print(OpAsmPrinter &printer) {
 
 parse 中的局部变量 `input` 保存尚未解析的引用，`type` 保存读到的类型，参数 `result` 是上节的 OperationState。
 
-那一串 `||` 按从左到右的顺序调用读取方法，任何一步失败就短路并返回 failure。例如关键字不是 same，就不再把后面的内容当成有效输入继续构造。`resolveOperand` 在读到类型之后执行，将文本引用连接到已有 Value；最后 `addTypes` 记录本操作新结果的类型。
+这串 `||` 从左到右调用读取方法，一步失败就短路并返回 failure。读到类型后，`resolveOperand` 将文本引用连接到已有 Value，`addTypes` 再记录新结果的类型。
 
 print 中的 `getInput()` 取得对象已经保存的 operand。`printOptionalAttrDict` 保留额外属性，冒号后的类型则从输入 Value 取得。对于合法 identity，输入和结果都受 I32 约束，因此这份文本足以恢复本例的结果类型。
 
-代码可以压缩成十几行，是因为状态已经由框架组织好了；理解时仍应按上一节的动作分开追踪，而不是只记住几个 parse 方法的名字。
+框架已提供读取 token、解析类型和查找 Value 的方法。这段代码按语法顺序调用它们，逐步填充构造状态。
 
 ## 5. 语法错误与验证错误
 
@@ -158,7 +162,7 @@ Parser 也可以检查自己读取的语法要求，但结构与语义约束仍�
 ./my-opt generic.mlir
 ```
 
-正常打印会重新得到带 same 的格式，参数名可能规范化。判断往返是否正确，应看输入引用、结果使用、类型和 tag 是否保留，而不要求临时名字完全恢复。
+正常打印会重新得到带 same 的格式，参数名可能规范化。往返解析应保持输入引用、结果使用、类型和 tag。
 
 例如若 printer 忘记输出属性字典，生成的文本仍可能是合法程序，但再次解析后 tag 已丢失。只检查工具退出成功看不出这项错误；必须检查需要保留的信息。
 

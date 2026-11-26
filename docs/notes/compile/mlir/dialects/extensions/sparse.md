@@ -1,7 +1,7 @@
 ---
 order: 20
 title: 稀疏编码与按存储坐标生成循环
-updated: 2026-10-04
+updated: 2026-11-24
 ---
 
 # 稀疏编码与按存储坐标生成循环
@@ -31,6 +31,10 @@ values = [2, 3, 4]
 
 输出从零开始时，第一行得到2×10+3×30=110，第二行得到4×20=80。若初值为[1,2]，则得到[111,82]，因为本例Linalg语义是累加到outs初值。
 
+![CSR：逻辑列号与存储条目编号是两套索引](./images/csr-coordinates.svg)
+
+按图先用行号查 `positions` 得到条目区间，再用条目编号查 `coordinates` 和 `values`。第二次查表得到的列号，才用于读取输入向量。这两次索引对应后文稀疏化生成的循环。
+
 ## 2. Tensor 形状与存储 Level
 
 MLIR用encoding保存这项存储约定：
@@ -43,7 +47,7 @@ MLIR用encoding保存这项存储约定：
 
 `tensor<2x3xf32,#csr>`仍有逻辑形状2×3；map描述逻辑维怎样映射到存储level。这里行level为dense，列level为compressed。更复杂编码可以重排或拆分维度，因此dimension与level不应永远当成同义词。
 
-compressed并不等于“运行时自动把所有零删除”。输入需要符合选定格式的坐标、排序和唯一性等契约，显式保存的零也可能存在。格式转换、构造和释放各有相应操作/运行时路径。[SparseTensor规范](https://mlir.llvm.org/docs/Dialects/SparseTensorOps/)定义这些表示。
+compressed 按格式契约保存坐标和值，包括排序、唯一性等要求；其中也可能保存显式的零。格式转换、构造和释放有各自的操作或运行时支持。[SparseTensor 规范](https://mlir.llvm.org/docs/Dialects/SparseTensorOps/)定义了这些表示。
 
 ## 3. 保留原来的数学迭代关系
 
@@ -56,7 +60,7 @@ iterator_types = ["parallel", "reduction"]
 
 区域仍然计算acc+A×x。变化发生在如何枚举有效贡献：稀疏编译器结合访问关系与encoding，选择positions/coordinates/values上的遍历。
 
-固定实验先运行 sparse-reinterpret-map，再运行 sparsification。前一步建立该版本稀疏变换使用的映射形式；只运行后一条Pass时，本例仍保留linalg.generic。Pass名称正确并不保证所有前置条件已满足。
+本例先运行 sparse-reinterpret-map，建立当前版本所需的映射形式，再运行 sparsification 展开稀疏计算。省去前一步时，linalg.generic 会保留下来。
 
 ## 4. 实际生成的存储循环
 
@@ -75,11 +79,11 @@ for i = 0 .. 2:
 
 实际IR包含sparse_tensor.positions、coordinates、values，随后是memref.load和scf.for。内层循环界限来自存储条目数量，列号来自coordinates，恰好对应第一节的手算。
 
-该输出仍包含稀疏类型、bufferization边界和存储访问，不是最终机器码。继续编译还需选择稀疏运行时或相应codegen、处理构造/释放与ABI，不能把这条局部转换当成完整可执行pipeline。
+输出中还包含稀疏类型、bufferization 边界和存储访问。后续需要选择稀疏运行时或相应 codegen，并继续处理构造、释放与 ABI。
 
 ## 5. 跳过零的语义与代价
 
-当前有限数值例子可以直接按非零项推演，但一般浮点程序还有NaN/Inf、符号零和归约顺序等边界。省略乘零或重新排序是否允许，必须与源操作及项目采用的稀疏语义一致，不能只依据实数代数。
+这个有限数值例子可以按非零项推演。处理一般浮点程序时，还要依据源操作和项目的稀疏语义，判断 NaN/Inf、符号零及归约顺序对省略乘零、重排计算的影响。
 
 性能也取决于稀疏率、行长度分布、坐标开销、访问局部性和并行负载。一个很小矩阵或不规则索引可能比密集kernel更慢；编码选择与算子调度应共同评估。
 

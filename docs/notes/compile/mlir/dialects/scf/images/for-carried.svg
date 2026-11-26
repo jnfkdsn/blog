@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="620" height="219" viewBox="0 0 620 219" role="img" aria-labelledby="title desc">
+<title id="title">scf.for 的循环携带值</title><desc id="desc">第一次迭代用初值；本轮 yield 的值在还有迭代时成为下轮参数，循环终止时成为结果。</desc>
+<defs><marker id="tip" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M1 1 L8 4.5 L1 8" fill="none" stroke="#465d71" stroke-width="1.7"/></marker></defs>
+<rect x="1" y="1" width="618" height="217" rx="8" fill="#fafbfd" stroke="#ccd5df"/>
+<g font-family="system-ui, sans-serif" fill="#182c42">
+<rect x="15" y="54" width="115" height="42" rx="5" fill="#e3edf8" stroke="#8293a3"/>
+<text x="72.5" y="81.0" font-size="17" text-anchor="middle" font-weight="400">%initial</text>
+<rect x="190" y="54" width="128" height="42" rx="5" fill="#e3edf8" stroke="#8293a3"/>
+<text x="254.0" y="81.0" font-size="17" text-anchor="middle" font-weight="400">块参数 %acc</text>
+<rect x="392" y="54" width="207" height="42" rx="5" fill="#daf0e7" stroke="#8293a3"/>
+<text x="495.5" y="81.0" font-size="17" text-anchor="middle" font-weight="400">%next = %acc + 1</text>
+<path d="M130 75 H187" fill="none" stroke="#465d71" stroke-width="1.8" marker-end="url(#tip)"/>
+<path d="M318 75 H389" fill="none" stroke="#465d71" stroke-width="1.8" marker-end="url(#tip)"/>
+<text x="493" y="124" font-size="16" text-anchor="middle" font-weight="400">scf.yield %next</text>
+<path d="M493 96 V102" fill="none" stroke="#465d71" stroke-width="1.8" marker-end="url(#tip)"/>
+<path d="M418 120 H254 V98" fill="none" stroke="#465d71" stroke-width="1.8" marker-end="url(#tip)"/>
+<text x="327" y="149" font-size="15" text-anchor="middle" font-weight="400">还有下一轮</text>
+<path d="M496 133 V157" fill="none" stroke="#465d71" stroke-width="1.8" marker-end="url(#tip)"/>
+<rect x="406" y="160" width="182" height="39" rx="5" fill="#fff0d8" stroke="#8293a3"/>
+<text x="497.0" y="185.5" font-size="17" text-anchor="middle" font-weight="400">结束 → %result</text>
+<text x="18" y="190" font-size="15" text-anchor="start" font-weight="400">零轮时，%result 直接取初值。</text>
+</g></svg>
