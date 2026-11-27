@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="620" height="220" viewBox="0 0 620 220" role="img" aria-labelledby="title desc">
+<title id="title">同一输出由 VM 准备、计算函数写入</title><desc id="desc">清空 storage 寄存器后，输出张量仍保持对底层分配的引用。</desc>
+<defs><marker id="tip" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M1 1 L8 4.5 L1 8" fill="none" stroke="#465d71" stroke-width="1.7"/></marker></defs>
+<rect x="1" y="1" width="618" height="218" rx="8" fill="#fafbfd" stroke="#ccd5df"/>
+<g font-family="system-ui, sans-serif" fill="#182c42">
+<text x="18" y="27" font-size="18" text-anchor="start" font-weight="600">一次 main 调用</text>
+<rect x="16" y="47" width="150" height="42" rx="5" fill="#e3edf8" stroke="#8293a3"/>
+<text x="91.0" y="74.0" font-size="17" text-anchor="middle" font-weight="400">%3：storage</text>
+<rect x="16" y="145" width="150" height="42" rx="5" fill="#daf0e7" stroke="#8293a3"/>
+<text x="91.0" y="172.0" font-size="17" text-anchor="middle" font-weight="400">%4：输出张量</text>
+<rect x="222" y="94" width="171" height="42" rx="5" fill="#fff0d8" stroke="#8293a3"/>
+<text x="307.5" y="121.0" font-size="17" text-anchor="middle" font-weight="400">同一块数据空间</text>
+<rect x="452" y="48" width="149" height="42" rx="5" fill="#e3edf8" stroke="#8293a3"/>
+<text x="526.5" y="75.0" font-size="17" text-anchor="middle" font-weight="400">计算函数</text>
+<rect x="452" y="146" width="149" height="42" rx="5" fill="#e3edf8" stroke="#8293a3"/>
+<text x="526.5" y="173.0" font-size="17" text-anchor="middle" font-weight="400">调用者</text>
+<path d="M166 68 H194 V105 H219" fill="none" stroke="#465d71" stroke-width="1.8" marker-end="url(#tip)"/>
+<path d="M166 166 H194 V126 H219" fill="none" stroke="#465d71" stroke-width="1.8" marker-end="url(#tip)"/>
+<path d="M452 69 H422 V115 H397" fill="none" stroke="#465d71" stroke-width="1.8" marker-end="url(#tip)"/>
+<path d="M166 179 V203 H527 V191" fill="none" stroke="#465d71" stroke-width="1.8" marker-end="url(#tip)"/>
+<text x="320" y="195" font-size="15" text-anchor="middle" font-weight="400">main 返回 %4</text>
+<text x="88" y="109" font-size="15" text-anchor="middle" font-weight="400">随后清空 %3</text>
+<text x="504" y="111" font-size="15" text-anchor="middle" font-weight="400">通过 %4 写入</text>
+</g></svg>

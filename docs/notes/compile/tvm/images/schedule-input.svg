@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="580" height="237" viewBox="0 0 580 237" role="img" aria-labelledby="title desc">
+  <title id="title">Schedule 与两份 TensorIR</title>
+  <desc id="desc">编译时把分块决定应用到原 Matmul 得到 sch.mod，运行时输入与输出由实际程序处理。</desc>
+  <defs><marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L8 4 L0 8 Z" fill="#45576c"/></marker></defs>
+  <g font-family="system-ui, sans-serif" fill="#1c293b">
+    <rect x="1" y="1" width="578" height="235" rx="7" fill="#fafbfc" stroke="#cdd5df"/>
+    <text x="17" y="28" font-size="18" text-anchor="start" font-weight="600">编译时</text>
+    <rect x="16" y="43" width="176" height="39" rx="7" fill="#e8f1ff" stroke="#72869c"/>
+    <text x="104.0" y="68.5" font-size="18" text-anchor="middle" font-weight="400">原始 TensorIR</text>
+    <rect x="16" y="99" width="176" height="39" rx="7" fill="#fff1d6" stroke="#72869c"/>
+    <text x="104.0" y="124.5" font-size="18" text-anchor="middle" font-weight="400">策略：列块宽度 8</text>
+    <rect x="224" y="72" width="141" height="39" rx="7" fill="#e8f1ff" stroke="#72869c"/>
+    <text x="294.5" y="97.5" font-size="18" text-anchor="middle" font-weight="400">Schedule</text>
+    <rect x="399" y="72" width="164" height="39" rx="7" fill="#e1f4ed" stroke="#72869c"/>
+    <text x="481.0" y="97.5" font-size="18" text-anchor="middle" font-weight="400">新 IR：sch.mod</text>
+    <path d="M192 62 H206 V86 H222" fill="none" stroke="#45576c" stroke-width="2" marker-end="url(#arrow)"/>
+    <path d="M192 118 H206 V101 H222" fill="none" stroke="#45576c" stroke-width="2" marker-end="url(#arrow)"/>
+    <path d="M365 92 H397" fill="none" stroke="#45576c" stroke-width="2" marker-end="url(#arrow)"/>
+    <text x="19" y="171" font-size="18" text-anchor="start" font-weight="600">运行时</text>
+    <path d="M480 111 V178" fill="none" stroke="#45576c" stroke-width="2" marker-end="url(#arrow)"/>
+    <text x="488" y="153" font-size="15" text-anchor="start" font-weight="400">编译</text>
+    <rect x="19" y="179" width="131" height="39" rx="7" fill="#e8f1ff" stroke="#72869c"/>
+    <text x="84.5" y="204.5" font-size="18" text-anchor="middle" font-weight="400">输入 A、B</text>
+    <rect x="339" y="179" width="224" height="39" rx="7" fill="#e1f4ed" stroke="#72869c"/>
+    <text x="451.0" y="204.5" font-size="18" text-anchor="middle" font-weight="400">数值程序写入 C</text>
+    <path d="M150 198 H337" fill="none" stroke="#45576c" stroke-width="2" marker-end="url(#arrow)"/>
+  </g>
+</svg>

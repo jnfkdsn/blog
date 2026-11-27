@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="620" height="175" viewBox="0 0 620 175" role="img" aria-labelledby="title desc">
+<title id="title">融合候选中的分叉与汇合</title><desc id="desc">matmul 的结果分别流向 relu 和 scale，两条路径都到达 add。</desc>
+<defs><marker id="tip" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M1 1 L8 4.5 L1 8" fill="none" stroke="#465d71" stroke-width="1.7"/></marker></defs>
+<rect x="1" y="1" width="618" height="173" rx="8" fill="#fafbfd" stroke="#ccd5df"/>
+<g font-family="system-ui, sans-serif" fill="#182c42">
+<rect x="17" y="68" width="130" height="42" rx="5" fill="#e3edf8" stroke="#8293a3"/>
+<text x="82.0" y="95.0" font-size="17" text-anchor="middle" font-weight="400">matmul</text>
+<rect x="232" y="24" width="118" height="42" rx="5" fill="#daf0e7" stroke="#8293a3"/>
+<text x="291.0" y="51.0" font-size="17" text-anchor="middle" font-weight="400">relu</text>
+<rect x="232" y="111" width="118" height="42" rx="5" fill="#fff0d8" stroke="#8293a3"/>
+<text x="291.0" y="138.0" font-size="17" text-anchor="middle" font-weight="400">scale</text>
+<rect x="457" y="68" width="130" height="42" rx="5" fill="#e3edf8" stroke="#8293a3"/>
+<text x="522.0" y="95.0" font-size="17" text-anchor="middle" font-weight="400">add</text>
+<path d="M147 89 H176 V45 H229" fill="none" stroke="#465d71" stroke-width="1.8" marker-end="url(#tip)"/>
+<path d="M176 89 V132 H229" fill="none" stroke="#465d71" stroke-width="1.8" marker-end="url(#tip)"/>
+<path d="M350 45 H418 V83 H454" fill="none" stroke="#465d71" stroke-width="1.8" marker-end="url(#tip)"/>
+<path d="M350 132 H418 V95 H454" fill="none" stroke="#465d71" stroke-width="1.8" marker-end="url(#tip)"/>
+</g></svg>

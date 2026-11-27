@@ -1,14 +1,27 @@
 ---
 order: 3
 title: 操作实现转换与图融合
-updated: 2026-10-30
+updated: 2026-11-24
 ---
 
 # 操作实现转换与图融合
 
-Relax 已经记录 `matmul → add → relu`，也知道每个结果的形状。现在要把模型交给 CPU：矩阵乘法的循环从哪里来？三个操作为什么被选在一组？放到一组以后，中间张量又在哪里？
+上一章的 Relax 已经说明要依次做矩阵乘法、加偏置和 ReLU，却还没有给出矩阵乘法内部的循环。现在要让这份模型逐步接近可执行程序，同时减少不必要的计算与存储开销。
 
-本章沿同一个模型回答这三个问题：先生成实现，再根据依赖选择分组，最后连接组内函数与 buffer。主线是“编译器取得什么信息，依据什么作决定，决定后程序如何变化”。
+先看本章跟踪的三次变化：
+
+```text
+Relax：matmul → add → relu
+    ↓ 为每个操作补上实现
+Relax 调用三个 TensorIR 函数
+    ↓ 根据依赖选择可融合的一组计算
+组合成一个 TensorIR 函数
+    ↓ 继续调整内部循环与存储，才可能减少中间访存
+```
+
+这些步骤逐步建立实现：`call_tir` 连接 Relax 调用与低层计算，分组决定哪些操作共同处理，后续函数合并和调度再决定中间 buffer 的去留。
+
+下面始终追踪这三个操作：先看矩阵乘法实现怎样生成，再看为什么把它和 add、relu 分成一组，最后打开合成的函数检查循环和 buffer。每一步都对照变换前后的程序。
 
 ## 1. 操作语义与具体实现
 
@@ -45,7 +58,7 @@ def _matmul(bb, call):
 输出元素：sum_k(x[i,k] * weight[k,j])
 ```
 
-`bb.call_te` 将这种描述转换成 TensorIR PrimFunc，加入当前模块，并返回相应的 Relax 调用。因此一次转换同时提供了具体实现和引用它的调用。TE 的通用构造接口可以按需查阅，当前需要理解它承担“描述元素计算以生成实现”的作用。
+`bb.call_te` 根据张量表达式生成 TensorIR PrimFunc，把它加入当前模块，再返回调用该函数的 Relax 表达式。于是模块里同时有了“怎样计算矩阵乘法”的函数和“在哪里调用它”的语句。
 
 ## 2. 转换后的模块与调用关系
 
@@ -58,7 +71,7 @@ mm = R.call_tir(
 )
 ```
 
-`Module.matmul` 指向新增的 TensorIR 函数，`(x, weight)` 是输入，`out_sinfo` 描述结果结构。输出存储的分配还会在后续阶段落实。
+`Module.matmul` 指向新增的 TensorIR 函数，`(x, weight)` 是输入，`out_sinfo` 说明结果的形状和类型。后续编译会生成准备输出存储的代码，再把输出一同传给这个函数。
 
 加法和 ReLU 也取得实现后，模块关系是：
 
@@ -77,7 +90,9 @@ main 仍组织张量数据流，各个 PrimFunc 描述具体计算。得到正�
 
 ## 3. 融合候选的计算模式
 
-将相关计算放进一个低层函数，能为后续调整计算位置提供空间。但操作可能有其他消费者，实现也可能不适合某种组合，不能仅凭代码行相邻就分组。
+到这里，每项高层操作已经有可调用的实现。下一步是决定哪些调用值得组合：先识别每项计算的访问模式，再检查它们在整张图中的使用路径。
+
+将计算放进同一低层函数后，调度可以继续调整计算位置。分组前需检查其他消费者、实现支持和数据依赖。
 
 `AnnotateTIROpPattern` 分析 TensorIR，为实现附上模式分类。本例实际输出为：
 
@@ -87,9 +102,9 @@ main 仍组织张量数据流，各个 PrimFunc 描述具体计算。得到正�
 | add | 0 | `kElemWise`；输出与矩阵输入位置对应，bias 被广播读取 |
 | relu | 0 | `kElemWise`；每个输出消费对应位置的输入 |
 
-数字是此版本的分类编码，无需背诵。虽然 add 的 bias 有广播，本例实际分类仍是 0，不能仅根据算子名字猜类别。
+这些数字是当前版本的分类编码。本例虽然包含 bias 广播，实际实现仍归类为 0；可以结合生成的访问模式理解分类结果。
 
-Relax 原来已经知道操作语义、形状和类型；现在又取得了实现层的访问和计算模式。后续策略使用这些模式筛选组合，而不是在这里运行所有候选来测量谁最快。
+Relax 已有操作语义、形状和类型；现在还取得了实现层的访问与计算模式。融合策略根据这些模式筛选可以组合的操作。
 
 ## 4. 使用路径与分组边界
 
@@ -101,13 +116,9 @@ matmul → add → relu → 区域输出
 
 算法沿使用关系寻找下游候选，并检查连接路径上的模式与已有分组。本例符合规则，最终将三个计算合为一组。
 
-更多操作可能形成分支。下面是解释算法的示意图，scale 表示逐元素缩放：
+若 matmul 的结果有两个使用者，沿图中上下两路分别走到 add。scale 在这里表示逐元素缩放。
 
-```text
-             ┌→ relu ───┐
-matmul ──────┤          ├→ add → 输出
-             └→ scale ──┘
-```
+![matmul 分别流向 relu 和 scale，再在 add 处汇合](./images/fusion-paths.svg)
 
 只沿 relu 路径考虑融合，会漏掉 scale 仍需要 matmul 结果这件事。算法先寻找从当前节点出发的所有使用路径必经的下游节点；这里两条路径在 add 汇合。这个关系称为后支配关系，它帮助确定要检查的候选范围。
 
@@ -127,15 +138,17 @@ CheckPath：检查路径与已有组是否符合模式规则
 CommitFuse：将通过检查的节点归入同一组
 ```
 
-实现用并查集维护组，并分阶段应用不同模式的规则。理解本例可以先不展开树构造和并查集的内部代码，但不能省略“为什么检查两条路径”这个决策依据。
+实现用并查集记录哪些节点已经属于同一组，并分阶段应用不同计算模式的融合规则。对这张分支图，先抓住一件事：matmul 的结果同时流向 relu 和 scale，判断分组时必须检查两条路径。
 
-若模型还要返回 mm，它就必须离开当前区域，不能继续视作只有组内消费者的临时值。具体分组需要重新计算。数学上能够设计多输出融合，不保证当前通用算法一定采用它；合法性、策略选择和实际收益是不同问题。
+若模型还要返回 mm，它就需要对组外可见，分组策略会重新处理这个使用关系。支持多输出融合的实现可以保留该结果，具体选择还取决于算法支持及收益判断。
 
-本例说明一种跨层设计：Relax没有只根据高层算子名字分组，而是消费从TensorIR实现分析出来的模式。更换实现后，即使数学操作名相同，可用于分组的事实也可能不同。因此实现、分析摘要和消费者需要保持一致。
+Relax 融合分析读取 TensorIR 的 `op_pattern`。底层实现变化后，应重新分析访问模式，使分组使用与实际计算一致的信息。
 
-DPL是另一项工具：当开发者要识别一个明确子图并自定义替换时，可以写Dataflow Pattern及回调。它并不意味着本节通用FuseOps必须依赖一个手写的matmul-add-relu模式。本节追踪的是已有分组算法，第八章会实际实现一个DPL函数Pass，让两种工作分开可见。
+如果开发者已经知道要替换哪个子图，可以用 DPL（Dataflow Pattern）描述它，并编写匹配后的替换函数。第八章会用它删除重复 ReLU。本章的 `FuseOps` 则按计算模式和使用路径进行通用分组，不需要我们先手写一个 matmul-add-relu 模式。
 
 ## 5. Relax 分组与 TensorIR 函数组合
+
+模式和使用路径给出了分组依据。现在看这项决定怎样真正改变 Relax 调用和 TensorIR 函数。
 
 `FuseOps` 将选定调用提取到带 Primitive 属性的 Relax 函数。主例此时的实际结构为：
 
@@ -150,7 +163,7 @@ group（Relax，实际名称为 fused_matmul_add_relu）：
 模块中仍有三个独立的 TensorIR PrimFunc
 ```
 
-分组函数表达共同处理的边界。随后 `FuseTIR` 把组内实现组合起来：将 matmul 输出接到 add 输入，将 add 输出接到 relu 输入，同时整合参数与局部存储。
+此时三个调用位于同一个 Relax 函数中，底层实现仍是分开的。随后 `FuseTIR` 才把它们组合起来：将 matmul 的输出作为 add 的输入，将 add 的输出作为 relu 的输入，并整理合成函数的参数与局部存储。
 
 组合后的数值意图如下，是省略轴声明的伪代码：
 
@@ -166,6 +179,8 @@ main 现在通过一次 call_tir 调用这个 PrimFunc。实际生成 IR 仍有�
 
 ## 6. 循环调整与中间存储
 
+函数已经组合起来，但上一节仍能看到中间 buffer。要判断访存是否减少，还必须打开函数检查计算顺序与存储。
+
 进一步考虑每算完一个输出元素，就完成它的后处理：
 
 ```text
@@ -175,7 +190,7 @@ main 现在通过一次 call_tir 调用这个 PrimFunc。实际生成 IR 仍有�
     out[i,j] = max(acc + bias[j], 0)
 ```
 
-这种组织不要求完整的 M、A 中间矩阵。它省去了显式中间矩阵及相应读写，局部值最终是否全部留在寄存器，还取决于后端和资源条件。这是进一步的候选方案，不是上节输出已经完成的变换。
+这种候选实现省去完整的 M、A 中间矩阵及相应读写，改为使用局部值。局部值最终如何存放，则由后端结合寄存器资源等条件决定。
 
 后处理必须等待对应归约完成。若两项乘积为 -2、3，bias 为零，正确计算得到 `max(-2+3,0)=1`。若每次累加后都做 ReLU，第一次将 -2 改成 0，第二次得到 3，结果就改变了。
 
@@ -189,4 +204,4 @@ main 现在通过一次 call_tir 调用这个 PrimFunc。实际生成 IR 仍有�
 2. 菱形图中，为什么只检查 relu 分支不足以决定 matmul 的分组？若 scale 是 opaque 调用，会影响哪一步？
 3. 合成一个 PrimFunc 后仍有 M、A 两块存储，能否说中间访存已经消除？改变什么计算组织才有机会省掉它们？
 
-规则与调用链可查 [matmul legalization](https://github.com/apache/tvm/blob/v0.20.0/python/tvm/relax/transform/legalize_ops/linear_algebra.py)、[BlockBuilder.call_te](https://github.com/apache/tvm/blob/v0.20.0/python/tvm/relax/block_builder.py)、[LegalizeOps](https://github.com/apache/tvm/blob/v0.20.0/src/relax/transform/legalize_ops.cc)。分组对应 [FuseOps](https://github.com/apache/tvm/blob/v0.20.0/src/relax/transform/fuse_ops.cc) 与 [GraphPartitioner](https://github.com/apache/tvm/blob/v0.20.0/src/relax/analysis/graph_partitioner.cc)，组合对应 [FuseTIR](https://github.com/apache/tvm/blob/v0.20.0/src/relax/transform/fuse_tir.cc)。[配套实验](https://github.com/jnfkdsn/aicompiler/tree/main/tvm-e2e)保存主例的实际阶段输出；分支图是本文算法推演，未冒充已运行的分支实验。
+规则与调用链可查 [matmul legalization](https://github.com/apache/tvm/blob/v0.20.0/python/tvm/relax/transform/legalize_ops/linear_algebra.py)、[BlockBuilder.call_te](https://github.com/apache/tvm/blob/v0.20.0/python/tvm/relax/block_builder.py)、[LegalizeOps](https://github.com/apache/tvm/blob/v0.20.0/src/relax/transform/legalize_ops.cc)。分组对应 [FuseOps](https://github.com/apache/tvm/blob/v0.20.0/src/relax/transform/fuse_ops.cc) 与 [GraphPartitioner](https://github.com/apache/tvm/blob/v0.20.0/src/relax/analysis/graph_partitioner.cc)，组合对应 [FuseTIR](https://github.com/apache/tvm/blob/v0.20.0/src/relax/transform/fuse_tir.cc)。[配套实验](https://github.com/jnfkdsn/aicompiler/tree/main/tvm-e2e)保存主例的实际阶段输出；分支图用于推演分组检查，没有包含在这组实验中。

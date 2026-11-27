@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="620" height="207" viewBox="0 0 620 207" role="img" aria-labelledby="title desc">
+<title id="title">两个返回位置的改写</title><desc id="desc">替换的是外层调用，原先读取外层的第二个返回位置改读内层。</desc>
+<defs><marker id="tip" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M1 1 L8 4.5 L1 8" fill="none" stroke="#465d71" stroke-width="1.7"/></marker></defs>
+<rect x="1" y="1" width="618" height="205" rx="8" fill="#fafbfd" stroke="#ccd5df"/>
+<g font-family="system-ui, sans-serif" fill="#182c42">
+<text x="16" y="68" font-size="17" text-anchor="start" font-weight="600">改写前</text>
+<rect x="92" y="42" width="87" height="42" rx="5" fill="#e3edf8" stroke="#8293a3"/>
+<text x="135.5" y="69.0" font-size="17" text-anchor="middle" font-weight="400">x</text>
+<rect x="212" y="42" width="126" height="42" rx="5" fill="#daf0e7" stroke="#8293a3"/>
+<text x="275.0" y="69.0" font-size="17" text-anchor="middle" font-weight="400">内层 ReLU</text>
+<path d="M179 63 H209" fill="none" stroke="#465d71" stroke-width="1.8" marker-end="url(#tip)"/>
+<rect x="472" y="27" width="129" height="33" rx="5" fill="#fff0d8" stroke="#8293a3"/>
+<text x="536.5" y="49.5" font-size="15" text-anchor="middle" font-weight="400">返回位置 1</text>
+<rect x="472" y="71" width="129" height="33" rx="5" fill="#fff0d8" stroke="#8293a3"/>
+<text x="536.5" y="93.5" font-size="15" text-anchor="middle" font-weight="400">返回位置 2</text>
+<path d="M338 58 H349 V43 H469" fill="none" stroke="#465d71" stroke-width="1.8" marker-end="url(#tip)"/>
+<rect x="350" y="71" width="99" height="33" rx="5" fill="#e3edf8" stroke="#8293a3"/>
+<text x="399.5" y="93.5" font-size="15" text-anchor="middle" font-weight="400">外层 ReLU</text>
+<path d="M338 66 H341 V88 H348" fill="none" stroke="#465d71" stroke-width="1.8" marker-end="url(#tip)"/>
+<path d="M449 88 H469" fill="none" stroke="#465d71" stroke-width="1.8" marker-end="url(#tip)"/>
+<text x="16" y="152" font-size="17" text-anchor="start" font-weight="600">改写后</text>
+<rect x="92" y="126" width="87" height="42" rx="5" fill="#e3edf8" stroke="#8293a3"/>
+<text x="135.5" y="153.0" font-size="17" text-anchor="middle" font-weight="400">x</text>
+<rect x="212" y="126" width="126" height="42" rx="5" fill="#daf0e7" stroke="#8293a3"/>
+<text x="275.0" y="153.0" font-size="17" text-anchor="middle" font-weight="400">内层 ReLU</text>
+<path d="M179 147 H209" fill="none" stroke="#465d71" stroke-width="1.8" marker-end="url(#tip)"/>
+<rect x="472" y="111" width="129" height="33" rx="5" fill="#fff0d8" stroke="#8293a3"/>
+<text x="536.5" y="133.5" font-size="15" text-anchor="middle" font-weight="400">返回位置 1</text>
+<rect x="472" y="155" width="129" height="33" rx="5" fill="#fff0d8" stroke="#8293a3"/>
+<text x="536.5" y="177.5" font-size="15" text-anchor="middle" font-weight="400">返回位置 2</text>
+<path d="M338 142 H349 V127 H469" fill="none" stroke="#465d71" stroke-width="1.8" marker-end="url(#tip)"/>
+<path d="M338 150 H364 V172 H469" fill="none" stroke="#465d71" stroke-width="1.8" marker-end="url(#tip)"/>
+</g></svg>
