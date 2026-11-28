@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="620" height="191" viewBox="0 0 620 191" role="img" aria-labelledby="title desc">
+<title id="title">图段与缓存版本</title><desc id="desc">同次调用沿两个图段顺序执行；同一图段的不同版本只需选择符合 guards 的一个。</desc>
+<defs><marker id="tip" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M1 1 L8 4.5 L1 8" fill="none" stroke="#465d71" stroke-width="1.7"/></marker></defs>
+<rect x="1" y="1" width="618" height="189" rx="8" fill="#fafbfd" stroke="#ccd5df"/>
+<g font-family="system-ui, sans-serif" fill="#182c42">
+<text x="18" y="28" font-size="17" text-anchor="start" font-weight="600">一次有断图的调用：两段依次执行</text>
+<rect x="18" y="41" width="156" height="42" rx="5" fill="#e3edf8" stroke="#8293a3"/>
+<text x="96.0" y="68.0" font-size="17" text-anchor="middle" font-weight="400">图段 1：sin</text>
+<rect x="227" y="41" width="155" height="42" rx="5" fill="#fff0d8" stroke="#8293a3"/>
+<text x="304.5" y="68.0" font-size="17" text-anchor="middle" font-weight="400">Python 续接点</text>
+<rect x="443" y="41" width="156" height="42" rx="5" fill="#e3edf8" stroke="#8293a3"/>
+<text x="521.0" y="68.0" font-size="17" text-anchor="middle" font-weight="400">图段 2：cos</text>
+<path d="M174 62 H224" fill="none" stroke="#465d71" stroke-width="1.8" marker-end="url(#tip)"/>
+<path d="M382 62 H440" fill="none" stroke="#465d71" stroke-width="1.8" marker-end="url(#tip)"/>
+<text x="18" y="120" font-size="17" text-anchor="start" font-weight="600">另一个实验：同一图段的静态版本</text>
+<rect x="18" y="133" width="244" height="42" rx="5" fill="#daf0e7" stroke="#8293a3"/>
+<text x="140.0" y="160.0" font-size="17" text-anchor="middle" font-weight="400">batch = 2 → 版本 A</text>
+<rect x="315" y="133" width="284" height="42" rx="5" fill="#daf0e7" stroke="#8293a3"/>
+<text x="457.0" y="160.0" font-size="17" text-anchor="middle" font-weight="400">batch = 5 → 版本 B</text>
+</g></svg>

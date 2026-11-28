@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="580" height="204" viewBox="0 0 580 204" role="img" aria-labelledby="title desc">
+  <title id="title">捕获与代码生成之间的语义整理</title>
+  <desc id="desc">Dynamo 交出 FX 图。AOT 处理更新和别名等语义、整理图与调用约定，再由编译回调进入 Inductor 核心。</desc>
+  <defs><marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L8 4 L0 8 Z" fill="#45576c"/></marker></defs>
+  <g font-family="system-ui, sans-serif" fill="#1c293b">
+    <rect x="1" y="1" width="578" height="202" rx="7" fill="#fafbfc" stroke="#cdd5df"/>
+    <rect x="16" y="24" width="155" height="39" rx="7" fill="#e8f1ff" stroke="#72869c"/>
+    <text x="93.5" y="49.5" font-size="18" text-anchor="middle" font-weight="400">Dynamo · FX 图</text>
+    <rect x="213" y="24" width="347" height="39" rx="7" fill="#e8f1ff" stroke="#72869c"/>
+    <text x="386.5" y="49.5" font-size="18" text-anchor="middle" font-weight="400">compile_fx 进入 AOT 相关处理</text>
+    <path d="M171 44 H211" fill="none" stroke="#45576c" stroke-width="2" marker-end="url(#arrow)"/>
+    <rect x="20" y="125" width="242" height="39" rx="7" fill="#fff1d6" stroke="#72869c"/>
+    <text x="141.0" y="150.5" font-size="18" text-anchor="middle" font-weight="400">记录调用时应保留的更新</text>
+    <rect x="301" y="125" width="259" height="39" rx="7" fill="#e1f4ed" stroke="#72869c"/>
+    <text x="430.5" y="150.5" font-size="18" text-anchor="middle" font-weight="400">整理后的图 → 编译回调</text>
+    <path d="M367 63 V88 H142 V123" fill="none" stroke="#45576c" stroke-width="2" marker-end="url(#arrow)"/>
+    <path d="M401 63 V88 H432 V123" fill="none" stroke="#45576c" stroke-width="2" marker-end="url(#arrow)"/>
+    <text x="141" y="190" font-size="16" text-anchor="middle" font-weight="400">调用时保持外部行为</text>
+    <text x="432" y="190" font-size="16" text-anchor="middle" font-weight="400">Inductor 选择实现并生成代码</text>
+  </g>
+</svg>
